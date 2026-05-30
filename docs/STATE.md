@@ -3,9 +3,9 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** Fase 1 — Fundação (em andamento)
-- **Último bloco concluído:** Bloco 1.2 — schema SQLite + migrations espelhadas TS+Py + testes (Vitest 5 ✓, pytest 5 ✓, tsc/ruff/mypy ✓)
-- **Próximo bloco:** Fase 2 — vertical slice: MCP server `query_behavior` (mock) + CLI `status`/`list behaviors`
+- **Fase atual:** Fase 2 — vertical slice (em andamento)
+- **Último bloco concluído:** Bloco 2.1 — camada repo `behaviors` (insert/count/list/queryBehavior mock LIKE) + `config.resolveDbPath` (env `QA_MEMORY_DB` || default `.qa-memory/qa-memory.db`) + testes (Vitest 13 ✓ total, tsc ✓)
+- **Próximo bloco:** Bloco 2.2 — MCP server stdio com tool `query_behavior` + CLI `status`/`list behaviors` (consomem a camada repo)
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.14.1 · pnpm 11.5.0 (em `%APPDATA%\npm`)
