@@ -10,12 +10,18 @@ import {
   overrideRule,
 } from "./repo/rules.js";
 import { type Embedder, PythonEmbedder } from "./embedder.js";
+import { type Ingester, PythonIngester } from "./ingester.js";
 import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { VERSION } from "./version.js";
 
-// embedder is injectable so tests run without the Python subprocess/model.
-export function createServer(db: Database, embedder: Embedder = new PythonEmbedder()): McpServer {
+// embedder + ingester are injectable so tests run without the Python
+// subprocess/model/API key.
+export function createServer(
+  db: Database,
+  embedder: Embedder = new PythonEmbedder(),
+  ingester: Ingester = new PythonIngester(),
+): McpServer {
   const server = new McpServer({ name: "qa-memory", version: VERSION });
 
   server.registerTool(
@@ -159,6 +165,47 @@ export function createServer(db: Database, embedder: Embedder = new PythonEmbedd
           },
         ],
         structuredContent: { ok: true, action: "create", rule },
+      };
+    },
+  );
+
+  server.registerTool(
+    "add_to_memory",
+    {
+      title: "Remember text into qa-memory",
+      description:
+        "Ingest raw text (a fetched page, pasted notes, anything in hand) into the QA knowledge base: " +
+        "it is extracted into behaviors + rules and embedded for search. " +
+        "Hand it text you already have — for auth'd sources (Jira/Confluence/Drive), fetch with your own tools first, then pass the text here. " +
+        "Requires the Python ingestion package + ANTHROPIC_API_KEY on the server.",
+      inputSchema: {
+        text: z.string().describe("The text to remember"),
+        label: z.string().optional().describe("Short human label for this source (e.g. 'Checkout spec')"),
+        source_type: z
+          .string()
+          .optional()
+          .describe("Where it came from: confluence|jira|google_doc|conversation (default conversation)"),
+      },
+    },
+    (args: { text: string; label?: string; source_type?: string }) => {
+      if (!args.text.trim()) {
+        return {
+          content: [{ type: "text" as const, text: "Nothing to remember — text was empty." }],
+          structuredContent: { ok: false },
+        };
+      }
+      const result = ingester.ingestText(args.text, {
+        label: args.label ?? "text",
+        sourceType: args.source_type ?? "conversation",
+      });
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: result.ok ? `Remembered. ${result.message}` : `Could not ingest: ${result.message}`,
+          },
+        ],
+        structuredContent: { ok: result.ok, message: result.message },
       };
     },
   );

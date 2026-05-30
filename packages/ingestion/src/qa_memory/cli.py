@@ -1,9 +1,10 @@
 """CLI — `qa-memory` (ingestion side). Typer app.
 
 Commands:
-  ingest <pdf>   extract → chunk → two-pass → embed → persist into SQLite
-  status         show DB path + row counts
-  embed <text>   print the float32 embedding vector as JSON (for the MCP query path)
+  ingest <pdf>        extract → chunk → two-pass → embed → persist into SQLite
+  ingest-text <text>  ingest raw text (agent-fed content); '-' reads stdin
+  status              show DB path + row counts
+  embed <text>        print the float32 embedding vector as JSON (for the MCP query path)
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from qa_memory.pipeline.extractor import TwoPassExtractor
 from qa_memory.pipeline.ingest import ingest_doc
 from qa_memory.pipeline.llm import AnthropicClient
 from qa_memory.sources.pdf import PdfSource
+from qa_memory.sources.text import TextSource
 
 app = typer.Typer(help="qa-memory ingestion CLI", no_args_is_help=True)
 
@@ -45,6 +47,39 @@ def ingest(
         return
     typer.echo(
         f"ingested {pdf.name}: "
+        f"{report.behaviors} behaviors, {report.rules} rules, "
+        f"{report.embeddings} embeddings, {report.tokens} tokens"
+        + (" [budget exhausted]" if report.budget_exhausted else "")
+    )
+
+
+@app.command(name="ingest-text")
+def ingest_text(
+    text: Annotated[str, typer.Argument(help="Text to ingest; pass '-' to read from stdin")],
+    label: Annotated[str, typer.Option(help="Human label for this source")] = "text",
+    source_type: Annotated[
+        str, typer.Option(help="Tag for sources.type, e.g. confluence|jira|conversation")
+    ] = "conversation",
+    budget: Annotated[int, typer.Option(help="Token budget for this run")] = 50_000,
+) -> None:
+    """Ingest raw text (agent-fed content / pasted notes): chunk → two-pass → embed → persist."""
+    import sys
+
+    raw = sys.stdin.read() if text == "-" else text
+    if not raw.strip():
+        typer.secho("empty text", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    doc = TextSource(raw, label=label, source_type=source_type).extract()
+    conn = connect(resolve_db_path())
+    extractor = TwoPassExtractor(AnthropicClient(), budget=budget)
+    report = ingest_doc(conn, doc, extractor, LocalEmbeddingModel())
+
+    if report.skipped:
+        typer.echo(f"skipped (already ingested): {label} → source {report.source_id}")
+        return
+    typer.echo(
+        f"ingested {label}: "
         f"{report.behaviors} behaviors, {report.rules} rules, "
         f"{report.embeddings} embeddings, {report.tokens} tokens"
         + (" [budget exhausted]" if report.budget_exhausted else "")

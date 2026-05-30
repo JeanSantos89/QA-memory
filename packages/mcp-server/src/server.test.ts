@@ -4,9 +4,24 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDb } from "./db/index.js";
 import { insertBehavior } from "./repo/behaviors.js";
 import { insertRule } from "./repo/rules.js";
+import type { Embedder } from "./embedder.js";
+import type { Ingester, IngestResult } from "./ingester.js";
 import { createServer } from "./server.js";
 
-async function connectedClient() {
+const noEmbed: Embedder = { embed: () => null };
+
+// Records the last ingestText call so tests can assert routing.
+function spyIngester(result: IngestResult): Ingester & { last?: { text: string; label: string; sourceType: string } } {
+  const spy: Ingester & { last?: { text: string; label: string; sourceType: string } } = {
+    ingestText(text, opts) {
+      spy.last = { text, ...opts };
+      return result;
+    },
+  };
+  return spy;
+}
+
+async function connectedClient(ingester: Ingester = spyIngester({ ok: true, message: "ok" })) {
   const db = openDb(":memory:");
   const bid = insertBehavior(db, {
     name: "Login auth",
@@ -20,7 +35,7 @@ async function connectedClient() {
     confidence: 1.0,
     qa_override: true,
   });
-  const server = createServer(db);
+  const server = createServer(db, noEmbed, ingester);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -110,5 +125,34 @@ describe("update_rule tool over MCP", () => {
       arguments: { behavior: "zzz-nope", rule_text: "x", reason: "y" },
     })) as { structuredContent?: { ok: boolean } };
     expect(res.structuredContent?.ok).toBe(false);
+  });
+});
+
+describe("add_to_memory tool over MCP", () => {
+  it("routes text + label + source_type to the ingester and reports success", async () => {
+    const spy = spyIngester({ ok: true, message: "ingested checkout: 3 behaviors" });
+    const client = await connectedClient(spy);
+    const res = (await client.callTool({
+      name: "add_to_memory",
+      arguments: { text: "Checkout locks the cart on payment", label: "Checkout", source_type: "confluence" },
+    })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean } };
+
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.content[0]?.text).toContain("3 behaviors");
+    expect(spy.last).toEqual({
+      text: "Checkout locks the cart on payment",
+      label: "Checkout",
+      sourceType: "confluence",
+    });
+  });
+
+  it("surfaces ingestion failure (e.g. missing API key) without throwing", async () => {
+    const client = await connectedClient(spyIngester({ ok: false, message: "ANTHROPIC_API_KEY not set" }));
+    const res = (await client.callTool({
+      name: "add_to_memory",
+      arguments: { text: "something" },
+    })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+    expect(res.content[0]?.text).toContain("Could not ingest");
   });
 });
