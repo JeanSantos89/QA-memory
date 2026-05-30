@@ -3,9 +3,10 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** Fase 3 — Ingestão PDF (EM ANDAMENTO)
-- **Último bloco concluído:** Bloco 3.4 — wiring/persistência + CLI ingest. `config.py` (`resolve_db_path`, env `QA_MEMORY_DB` ou default `.qa-memory/qa-memory.db`, espelha config.ts). `db/repo.py`: `find_source_by_checksum` (guard) + `insert_source`/`insert_behavior` (confirmed_by_qa=0, source_ids JSON) /`insert_rule` (confidence 0.6, mid 0.5–0.8) /`insert_embedding` (vector BLOB). `pipeline/ingest.py`: `ingest_doc(conn, doc, extractor, embed_model)` → checksum-skip → chunk → two-pass → embed behaviors (batch) → persist em transação; retorna `IngestReport` (counts+tokens+budget_exhausted). `cli.py`: typer `app` com `ingest <pdf>` (deps reais: PdfSource+AnthropicClient+LocalEmbeddingModel) + `status` (path+counts). 35 testes pytest ✓ (4 novos: persist ponta a ponta com fakes, link source/embedding BLOB, checksum-skip sem dup, config), ruff ✓, mypy strict ✓.
-- **Próximo bloco:** Fase 4 — `query_risk` + `update_rule`/override em linguagem natural (MCP, lado TS). Alternativa de prioridade (ver decisões em aberto): subir Jira+Confluence como próximas fontes ingeridas (Atlassian, mesmo token) antes da Fase 4.
+- **Fase atual:** Fase 4 — query_risk + update_rule/override (FECHADA)
+- **Último bloco concluído:** Bloco 4.2 — `update_rule`/override (write). `repo/rules.ts` ganhou `getRuleById` + `overrideRule(db, id, rule_text, reason)` → fixa rule como QA-confirmada (confidence 1.0, qa_override=1, override_reason, updated_at); retorna rule atualizada ou null se id desconhecido. Tool `update_rule` no server.ts (NL): args `rule_text`+`reason` obrigatórios; `rule_id` → override de rule existente; senão `behavior` (texto livre) resolve via queryBehavior — 0 match → erro "crie behavior", >1 → lista p/ refinar (não chuta), 1 → insertRule QA (confidence 1.0). Sempre retorna `{ok, action, rule}` em structuredContent. Behavior.confirmed_by_qa NÃO é tocado (ato separado; addend futuro). 35 testes Vitest ✓ (rules +2 override, server +2 create/refuse), typecheck ✓.
+- **Bloco anterior:** 4.1 — `query_risk` (read) + repo de rules TS + score derivado transparente (`risk.ts`). Ver ADR 012.
+- **Próximo bloco:** Fase 5 — fontes Jira/Confluence (Atlassian, mesmo token) como próximas fontes ingeridas. Ver decisões em aberto. Pendência técnica ainda viva: `query_behavior`/`query_risk` usam LIKE; vetores gravados pela ingestão NÃO são consultados — busca semântica é bloco próprio.
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.14.1 · pnpm 11.5.0 (em `%APPDATA%\npm`)
@@ -17,7 +18,7 @@
 - [x] **Fase 1** — Fundação: estrutura + configs (✓ 1.1) + schema SQLite + migrations (TS+Py) com testes (✓ 1.2).
 - [x] **Fase 2** — Vertical slice: repo+config (✓ 2.1) + MCP server `query_behavior` + CLI `status`/`list behaviors`/`seed` + seed dogfood (✓ 2.2).
 - [x] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker (✓ 3.1) + two-pass extractor log tokens (✓ 3.2) + embeddings locais (✓ 3.3) + wiring/persistência + CLI ingest (✓ 3.4). Pipeline PDF ponta a ponta completo.
-- [ ] **Fase 4** — `query_risk` + `update_rule`/override em linguagem natural.
+- [x] **Fase 4** — `query_risk` (✓ 4.1) + `update_rule`/override em linguagem natural (✓ 4.2).
 - [ ] **Fase 5** — Jira, Google Docs, scheduler, Confluence/Notion/HAR, `suggest_tests`, install.sh, README real.
 
 ## Decisões em aberto
