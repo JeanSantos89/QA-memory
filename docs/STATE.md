@@ -3,9 +3,9 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** Fase 2 — vertical slice (CONCLUÍDA)
-- **Último bloco concluído:** Bloco 2.2 — MCP server stdio (`index.ts`) + `createServer` (`server.ts`) com tool `query_behavior` (consome `repo.queryBehavior`) + CLI `qa-memory` (`cli.ts`: `status`/`list behaviors`/`seed`) + seed dogfood neutro (`seed.ts`). Consomem a camada repo do 2.1. 22 testes Vitest ✓ (inclui integração in-memory client↔server), tsc ✓, CLI smoke-tested ponta a ponta. `openDb` agora cria o dir pai p/ DBs em arquivo.
-- **Próximo bloco:** Fase 3 — Ingestão PDF: base.py + pdf.py + chunker + two-pass extractor (log tokens) + embeddings locais.
+- **Fase atual:** Fase 3 — Ingestão PDF (EM ANDAMENTO)
+- **Último bloco concluído:** Bloco 3.1 — pipeline de texto puro (sem LLM/embeddings). `sources/base.py` (ABC `Source` + dataclass `ExtractedDoc` + `sha256_hex` p/ checksum) · `sources/pdf.py` (`PdfSource` extrai texto via pymupdf/fitz, import lazy) · `pipeline/chunker.py` (`chunk_text` char-based paragraph-aware, packing guloso, hard-split com overlap p/ parágrafo gigante). 15 testes pytest ✓ (chunker + PDF gerado em runtime via fitz), ruff ✓, mypy strict ✓. Dep nova: `pymupdf>=1.24`. mypy override `ignore_missing_imports` p/ módulo `fitz` (sem stubs).
+- **Próximo bloco:** Bloco 3.2 — two-pass extractor (anthropic, claude-haiku-4-5, log tokens input+output). Depois 3.3 — embeddings locais (all-MiniLM-L6-v2 via sentence-transformers).
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.14.1 · pnpm 11.5.0 (em `%APPDATA%\npm`)
@@ -16,7 +16,7 @@
 - [x] **Fase 0** — Infra auto-healing: docs vivos + hook de bloqueio.
 - [x] **Fase 1** — Fundação: estrutura + configs (✓ 1.1) + schema SQLite + migrations (TS+Py) com testes (✓ 1.2).
 - [x] **Fase 2** — Vertical slice: repo+config (✓ 2.1) + MCP server `query_behavior` + CLI `status`/`list behaviors`/`seed` + seed dogfood (✓ 2.2).
-- [ ] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker + two-pass extractor (log tokens) + embeddings locais.
+- [~] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker (✓ 3.1) + two-pass extractor (log tokens) + embeddings locais.
 - [ ] **Fase 4** — `query_risk` + `update_rule`/override em linguagem natural.
 - [ ] **Fase 5** — Jira, Google Docs, scheduler, Confluence/Notion/HAR, `suggest_tests`, install.sh, README real.
 
