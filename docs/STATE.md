@@ -4,8 +4,8 @@
 
 ## Status atual
 - **Fase atual:** Fase 3 — Ingestão PDF (EM ANDAMENTO)
-- **Último bloco concluído:** Bloco 3.2 — two-pass extractor. `pipeline/llm.py` (Protocol `LLMClient` + `LLMResponse` com tokens in/out; `AnthropicClient` wrapper lazy-import, model `claude-haiku-4-5-20251001`; extractor nunca importa anthropic direto → testes sem rede/API key). `pipeline/extractor.py` (`TwoPassExtractor`: pass 1 = summary ≤150 tok + flag `relevant`; pass 2 = extração full SÓ em chunks relevantes; `TokenUsage` acumula in+out toda call; budget default 50k, para antes de estourar — `budget_exhausted`; `_parse_json` tolerante a fences ```json e lixo). 20 testes pytest ✓ (fake client roteia respostas por ordem), ruff ✓, mypy strict ✓. Dep nova: `anthropic>=0.39`.
-- **Próximo bloco:** Bloco 3.3 — embeddings locais (all-MiniLM-L6-v2 via sentence-transformers): gerar vetor + serializar BLOB p/ tabela `embeddings`. Depois: persistência (gravar behaviors/rules/sources/embeddings no DB) + comando CLI de ingestão.
+- **Último bloco concluído:** Bloco 3.3 — embeddings locais. `pipeline/embeddings.py`: `pack_vector`/`unpack_vector` (serialização float32 BLOB via stdlib `array`, sem numpy na fronteira de storage) p/ coluna `embeddings.vector`; Protocol `EmbeddingModel`; `LocalEmbeddingModel` (sentence-transformers `all-MiniLM-L6-v2`, dim 384, lazy import → testes sem torch/download; encode([]) curto-circuita antes do load). 31 testes pytest ✓ (roundtrip serialização, fake model, dim), ruff ✓, mypy strict ✓. Dep nova: `sentence-transformers>=3.0` (puxa torch/transformers/scipy/sklearn).
+- **Próximo bloco:** Bloco 3.4 — wiring/persistência: gravar `sources` + `behaviors`/`rules` extraídos + `embeddings` no SQLite (camada repo Py espelhando o que faz sentido do TS) e comando CLI `qa-memory ingest <pdf>` ponta a ponta (extract → chunk → two-pass → embed → persist, com checksum p/ não reprocessar). Componentes 3.1–3.3 são as peças puras; 3.4 conecta tudo.
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.14.1 · pnpm 11.5.0 (em `%APPDATA%\npm`)
@@ -16,7 +16,7 @@
 - [x] **Fase 0** — Infra auto-healing: docs vivos + hook de bloqueio.
 - [x] **Fase 1** — Fundação: estrutura + configs (✓ 1.1) + schema SQLite + migrations (TS+Py) com testes (✓ 1.2).
 - [x] **Fase 2** — Vertical slice: repo+config (✓ 2.1) + MCP server `query_behavior` + CLI `status`/`list behaviors`/`seed` + seed dogfood (✓ 2.2).
-- [~] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker (✓ 3.1) + two-pass extractor log tokens (✓ 3.2) + embeddings locais.
+- [~] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker (✓ 3.1) + two-pass extractor log tokens (✓ 3.2) + embeddings locais (✓ 3.3). Falta wiring/persistência + CLI ingest (3.4).
 - [ ] **Fase 4** — `query_risk` + `update_rule`/override em linguagem natural.
 - [ ] **Fase 5** — Jira, Google Docs, scheduler, Confluence/Notion/HAR, `suggest_tests`, install.sh, README real.
 
