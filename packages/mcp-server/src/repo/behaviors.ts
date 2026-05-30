@@ -102,8 +102,29 @@ export function listBehaviors(
   return rows.map(hydrate);
 }
 
-// Mock semantic search: case-insensitive LIKE over name + description.
-// Empty query → returns all (non-deprecated). Real ranking arrives with embeddings (Fase 3).
+// Non-deprecated behaviors that have a stored embedding, paired with the
+// latest vector BLOB. Feeds semantic ranking (search.ts). One row per behavior
+// (most recent embedding wins).
+export function listBehaviorEmbeddings(db: Database): { behavior: Behavior; vector: Buffer }[] {
+  const rows = db
+    .prepare(
+      `SELECT b.*, e.vector AS vector
+         FROM behaviors b
+         JOIN embeddings e
+           ON e.entity_type = 'behavior' AND e.entity_id = b.id
+        WHERE b.status != 'deprecated'
+        GROUP BY b.id
+       HAVING e.created_at = MAX(e.created_at)`,
+    )
+    .all() as (BehaviorRow & { vector: Buffer })[];
+  return rows.map((row) => {
+    const { vector, ...behaviorRow } = row;
+    return { behavior: hydrate(behaviorRow), vector };
+  });
+}
+
+// Case-insensitive LIKE over name + description (lexical fallback).
+// Empty query → returns all (non-deprecated). Semantic ranking lives in search.ts.
 export function queryBehavior(
   db: Database,
   query: string,

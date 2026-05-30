@@ -9,10 +9,13 @@ import {
   listRulesForBehaviors,
   overrideRule,
 } from "./repo/rules.js";
+import { type Embedder, PythonEmbedder } from "./embedder.js";
+import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { VERSION } from "./version.js";
 
-export function createServer(db: Database): McpServer {
+// embedder is injectable so tests run without the Python subprocess/model.
+export function createServer(db: Database, embedder: Embedder = new PythonEmbedder()): McpServer {
   const server = new McpServer({ name: "qa-memory", version: VERSION });
 
   server.registerTool(
@@ -24,7 +27,7 @@ export function createServer(db: Database): McpServer {
       inputSchema: { query: z.string().describe("Free-text search over behavior name + description") },
     },
     (args: { query: string }) => {
-      const results = queryBehavior(db, args.query);
+      const results = searchBehaviors(db, embedder, args.query);
       const text =
         results.length === 0
           ? `No behaviors match "${args.query}".`
@@ -48,7 +51,7 @@ export function createServer(db: Database): McpServer {
       inputSchema: { query: z.string().describe("Free-text area, feature, or file to assess") },
     },
     (args: { query: string }) => {
-      const behaviors = queryBehavior(db, args.query);
+      const behaviors = searchBehaviors(db, embedder, args.query);
       const rules = listRulesForBehaviors(
         db,
         behaviors.map((b) => b.id),

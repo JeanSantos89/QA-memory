@@ -3,10 +3,11 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** Fase 4 — query_risk + update_rule/override (FECHADA)
-- **Último bloco concluído:** Bloco 4.2 — `update_rule`/override (write). `repo/rules.ts` ganhou `getRuleById` + `overrideRule(db, id, rule_text, reason)` → fixa rule como QA-confirmada (confidence 1.0, qa_override=1, override_reason, updated_at); retorna rule atualizada ou null se id desconhecido. Tool `update_rule` no server.ts (NL): args `rule_text`+`reason` obrigatórios; `rule_id` → override de rule existente; senão `behavior` (texto livre) resolve via queryBehavior — 0 match → erro "crie behavior", >1 → lista p/ refinar (não chuta), 1 → insertRule QA (confidence 1.0). Sempre retorna `{ok, action, rule}` em structuredContent. Behavior.confirmed_by_qa NÃO é tocado (ato separado; addend futuro). 35 testes Vitest ✓ (rules +2 override, server +2 create/refuse), typecheck ✓.
-- **Bloco anterior:** 4.1 — `query_risk` (read) + repo de rules TS + score derivado transparente (`risk.ts`). Ver ADR 012.
-- **Próximo bloco:** Fase 5 — fontes Jira/Confluence (Atlassian, mesmo token) como próximas fontes ingeridas. Ver decisões em aberto. Pendência técnica ainda viva: `query_behavior`/`query_risk` usam LIKE; vetores gravados pela ingestão NÃO são consultados — busca semântica é bloco próprio.
+- **Fase atual:** Fase 5 (reordenada) — Bloco S.1 BUSCA SEMÂNTICA fechado.
+- **Último bloco concluído:** Bloco S.1 — busca semântica ligada (furo #1 resolvido). Python ganhou comando CLI `embed "<texto>"` (imprime vetor JSON, stdout limpo, reusa LocalEmbeddingModel). TS: `embeddings.ts` (`unpackVector` BLOB float32 LE + `cosineSimilarity`, puros), `embedder.ts` (`Embedder` interface + `PythonEmbedder` via subprocess, comando configurável por env `QA_MEMORY_EMBED_CMD`, default `uv run qa-memory embed`; retorna null → fallback), `repo/behaviors.ts.listBehaviorEmbeddings` (behaviors não-deprecated + último vetor), `search.ts.searchBehaviors` (HÍBRIDO: ranking cosseno acima de floor 0.25, backfill LIKE; fallback puro LIKE se sem embeddings/embedder indisponível). `createServer(db, embedder?)` injeta embedder (default PythonEmbedder) → `query_behavior` e `query_risk` agora usam `searchBehaviors` (semântico+LIKE). `update_rule` mantém LIKE (escrita precisa precisão, não recall). 42 testes Vitest ✓ (embeddings 3, search 4), typecheck/ruff/mypy/pytest ✓. Ver ADR 015.
+- **Bloco anterior:** 4.2 — `update_rule`/override (write). 4.1 — `query_risk` + repo de rules TS + score derivado (`risk.ts`). Ver ADR 012/013.
+- **PENDÊNCIA S.1 (carregar p/ próximo chat):** validar embedding PONTA-A-PONTA com o modelo real (download ~90MB + cold-start torch) — testes cobrem só o ranking com fake embedder. E otimizar cold-start por query (helper Python "quente"/persistente). Embeddings ainda só de behaviors (rules/incidents = futuro).
+- **Próximo bloco:** seguir roadmap reordenado → **5.1 `add_to_memory`** (text|path) ou **B superfície guiada** (prompts+estado vazio+skill). Ver ADR 014.
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.14.1 · pnpm 11.5.0 (em `%APPDATA%\npm`)
@@ -19,8 +20,8 @@
 - [x] **Fase 2** — Vertical slice: repo+config (✓ 2.1) + MCP server `query_behavior` + CLI `status`/`list behaviors`/`seed` + seed dogfood (✓ 2.2).
 - [x] **Fase 3** — Ingestão PDF: base.py + pdf.py + chunker (✓ 3.1) + two-pass extractor log tokens (✓ 3.2) + embeddings locais (✓ 3.3) + wiring/persistência + CLI ingest (✓ 3.4). Pipeline PDF ponta a ponta completo.
 - [x] **Fase 4** — `query_risk` (✓ 4.1) + `update_rule`/override em linguagem natural (✓ 4.2).
-- [ ] **Fase 5 (REORDENADA — ver ADR 014)** — ordem por risco→valor:
-  - [ ] **S.1 — Busca semântica** (furo #1, prova a tese): ligar os vetores já gravados; query_behavior/query_risk param de usar só LIKE. ATACAR PRIMEIRO.
+- [ ] **Fase 5 (REORDENADA — ver ADR 014/015)** — ordem por risco→valor:
+  - [x] **S.1 — Busca semântica** (furo #1 RESOLVIDO): query embedada via subprocess Python (`qa-memory embed`), ranking cosseno no TS, híbrido com fallback LIKE. query_behavior/query_risk não dependem mais só de LIKE. Pendência: validação ponta-a-ponta com modelo real (run manual) + otimizar cold-start (helper Python quente). Embeddings ainda só de behaviors (rules/incidents futuros).
   - [ ] **5.1 — `add_to_memory`** (text | file-path): "jogou, lembrou". Núcleo do Dia 1. (auto-init já pronto.)
   - [ ] **B — Superfície guiada** (MCP prompts + estado vazio que ensina + skill onboarding). Resolve descoberta SEM UI. Serve técnico e não-técnico.
   - [ ] **Install script** (furo #2): sem ele o "Dia 0 ~2min" é mentira.

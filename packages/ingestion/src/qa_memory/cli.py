@@ -3,10 +3,12 @@
 Commands:
   ingest <pdf>   extract → chunk → two-pass → embed → persist into SQLite
   status         show DB path + row counts
+  embed <text>   print the float32 embedding vector as JSON (for the MCP query path)
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Annotated
 
@@ -58,6 +60,21 @@ def status() -> None:
     for table in ("sources", "behaviors", "rules", "embeddings"):
         count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
         typer.echo(f"  {table}: {count}")
+
+
+@app.command()
+def embed(
+    text: Annotated[str, typer.Argument(help="Text to embed")],
+) -> None:
+    """Print the embedding vector for TEXT as a JSON float array.
+
+    Stdout carries ONLY the JSON (model/progress noise goes to stderr) so the
+    MCP server can parse it from a subprocess. Mirrors the model used at ingest.
+    """
+    from qa_memory.pipeline.embeddings import LocalEmbeddingModel
+
+    vector = LocalEmbeddingModel().encode([text])[0]
+    typer.echo(json.dumps(vector))
 
 
 if __name__ == "__main__":
