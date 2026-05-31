@@ -36,7 +36,16 @@ _ANALYSIS_SYSTEM = (
     '"conflicts": [{"rule": str, "why": str}]}. '
     "breaks = what may break. watch = what to pay attention to when testing. "
     "conflicts = existing rules the change contradicts/affects (rule = the rule "
-    "text, why = how it conflicts). Empty lists if none. "
+    "text, why = how it conflicts). "
+    "RULES: "
+    "(1) If the change has MULTIPLE parts (e.g. joined by 'and'), analyze EVERY "
+    "part separately — never drop one. "
+    "(2) watch must NOT be empty for a real change: always name concrete test "
+    "angles (edge cases, data/state, money/fraud, regressions). "
+    "(3) Only list a conflict when the change genuinely contradicts or alters "
+    "that rule — do not pad with weak/speculative links. "
+    "(4) Quote the conflicting rule's actual text in `rule`, not a paraphrase. "
+    "Empty lists ONLY when truly nothing applies. "
     "Reply in the language of the proposed change."
 )
 
