@@ -6,9 +6,30 @@ import { insertBehavior } from "./repo/behaviors.js";
 import { insertRule } from "./repo/rules.js";
 import type { Embedder } from "./embedder.js";
 import type { Ingester, IngestResult } from "./ingester.js";
+import type { Assessor, ImpactAnalysis } from "./assessor.js";
 import { createServer } from "./server.js";
 
 const noEmbed: Embedder = { embed: () => Promise.resolve(null) };
+
+// Records the last assess call so tests can assert routing.
+function spyAssessor(result: ImpactAnalysis): Assessor & { last?: string } {
+  const spy: Assessor & { last?: string } = {
+    assess(change) {
+      spy.last = change;
+      return result;
+    },
+  };
+  return spy;
+}
+
+const okAnalysis: ImpactAnalysis = {
+  ok: true,
+  breaks: [],
+  watch: [],
+  conflicts: [],
+  relatedRules: [],
+  tokens: 0,
+};
 
 // Records the last ingestText call so tests can assert routing.
 function spyIngester(result: IngestResult): Ingester & { last?: { text: string; label: string; sourceType: string } } {
@@ -21,7 +42,10 @@ function spyIngester(result: IngestResult): Ingester & { last?: { text: string; 
   return spy;
 }
 
-async function connectedClient(ingester: Ingester = spyIngester({ ok: true, message: "ok" })) {
+async function connectedClient(
+  ingester: Ingester = spyIngester({ ok: true, message: "ok" }),
+  assessor: Assessor = spyAssessor(okAnalysis),
+) {
   const db = openDb(":memory:");
   const bid = insertBehavior(db, {
     name: "Login auth",
@@ -35,7 +59,7 @@ async function connectedClient(ingester: Ingester = spyIngester({ ok: true, mess
     confidence: 1.0,
     qa_override: true,
   });
-  const server = createServer(db, noEmbed, ingester);
+  const server = createServer(db, noEmbed, ingester, assessor);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -45,7 +69,7 @@ async function connectedClient(ingester: Ingester = spyIngester({ ok: true, mess
 // Empty DB — exercises the guided/empty-state surface (Block B).
 async function emptyClient() {
   const db = openDb(":memory:");
-  const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }));
+  const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "0.0.0" });
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -164,6 +188,68 @@ describe("add_to_memory tool over MCP", () => {
     })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean } };
     expect(res.structuredContent?.ok).toBe(false);
     expect(res.content[0]?.text).toContain("Could not ingest");
+  });
+});
+
+describe("analyze_impact tool over MCP", () => {
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("analyze_impact");
+  });
+
+  it("routes the change to the assessor and renders breaks/watch/conflicts", async () => {
+    const spy = spyAssessor({
+      ok: true,
+      breaks: ["the no-free-cancel guarantee"],
+      watch: ["the 5-minute window edge"],
+      conflicts: [{ rule: "no free cancel after accept", why: "directly reversed" }],
+      relatedRules: ["no free cancel after accept"],
+      tokens: 120,
+    });
+    const client = await connectedClient(undefined, spy);
+    const res = (await client.callTool({
+      name: "analyze_impact",
+      arguments: { change: "allow free cancel 5 min after accept" },
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: { ok: boolean; conflicts: Array<{ rule: string }>; tokens: number };
+    };
+
+    expect(spy.last).toBe("allow free cancel 5 min after accept");
+    expect(res.content[0]?.text).toContain("MAY BREAK");
+    expect(res.content[0]?.text).toContain("the no-free-cancel guarantee");
+    expect(res.content[0]?.text).toContain("no free cancel after accept");
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.structuredContent?.conflicts[0]?.rule).toBe("no free cancel after accept");
+    expect(res.structuredContent?.tokens).toBe(120);
+  });
+
+  it("surfaces analysis failure (e.g. LLM/subprocess error) without throwing", async () => {
+    const client = await connectedClient(undefined, spyAssessor({
+      ok: false,
+      breaks: [],
+      watch: [],
+      conflicts: [],
+      relatedRules: [],
+      tokens: 0,
+      message: "ollama daemon not reachable",
+    }));
+    const res = (await client.callTool({
+      name: "analyze_impact",
+      arguments: { change: "something" },
+    })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+    expect(res.content[0]?.text).toContain("Could not analyze");
+  });
+
+  it("rejects an empty change", async () => {
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "analyze_impact",
+      arguments: { change: "  " },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
   });
 });
 
