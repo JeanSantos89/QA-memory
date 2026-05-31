@@ -19,6 +19,7 @@ from qa_memory.config import resolve_db_path
 from qa_memory.db import connect
 from qa_memory.pipeline.embeddings import LocalEmbeddingModel
 from qa_memory.pipeline.extractor import TwoPassExtractor
+from qa_memory.pipeline.impact import analyze_impact
 from qa_memory.pipeline.ingest import ingest_doc
 from qa_memory.pipeline.llm import make_llm_client
 from qa_memory.sources.pdf import PdfSource
@@ -83,6 +84,41 @@ def ingest_text(
         f"{report.behaviors} behaviors, {report.rules} rules, "
         f"{report.embeddings} embeddings, {report.tokens} tokens"
         + (" [budget exhausted]" if report.budget_exhausted else "")
+    )
+
+
+@app.command()
+def assess(
+    change: Annotated[
+        str, typer.Argument(help="Proposed change to analyze; pass '-' to read from stdin")
+    ],
+) -> None:
+    """Analyze the impact of a proposed change against rules already in memory.
+
+    Retrieves related rules → LLM reasons about impact → prints JSON to stdout:
+    {"breaks":[...], "watch":[...], "conflicts":[{"rule","why"}], "tokens":N,
+     "related_rules":[...]}. Stdout carries ONLY the JSON (noise goes to stderr)
+    so the MCP server can parse it from a subprocess. Mirrors `embed`.
+    """
+    import sys
+
+    raw = sys.stdin.read() if change == "-" else change
+    if not raw.strip():
+        typer.secho("empty change", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    conn = connect(resolve_db_path())
+    result = analyze_impact(conn, raw, make_llm_client(), LocalEmbeddingModel())
+    typer.echo(
+        json.dumps(
+            {
+                "breaks": result.breaks,
+                "watch": result.watch,
+                "conflicts": [{"rule": c.rule, "why": c.why} for c in result.conflicts],
+                "related_rules": result.related_rules,
+                "tokens": result.usage.total,
+            }
+        )
     )
 
 

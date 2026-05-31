@@ -12,6 +12,7 @@ import {
 } from "./repo/rules.js";
 import { type Embedder, PersistentEmbedder } from "./embedder.js";
 import { type Ingester, PythonIngester } from "./ingester.js";
+import { type Assessor, PythonAssessor } from "./assessor.js";
 import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { VERSION } from "./version.js";
@@ -22,6 +23,7 @@ export function createServer(
   db: Database,
   embedder: Embedder = new PersistentEmbedder(),
   ingester: Ingester = new PythonIngester(),
+  assessor: Assessor = new PythonAssessor(),
 ): McpServer {
   const server = new McpServer({ name: "qa-memory", version: VERSION });
 
@@ -211,6 +213,70 @@ export function createServer(
           },
         ],
         structuredContent: { ok: result.ok, message: result.message },
+      };
+    },
+  );
+
+  server.registerTool(
+    "analyze_impact",
+    {
+      title: "Analyze the impact of a proposed change",
+      description:
+        "Given a PROPOSED change in plain language (e.g. \"allow free cancellation up to 5 min after the restaurant accepts\"), " +
+        "reason about its impact against the rules already in memory: what may BREAK, what to WATCH when testing, " +
+        "and which EXISTING rules it CONFLICTS with. This is the step beyond query_risk (which only scores) — it reasons about conflict. " +
+        "Requires the Python ingestion package + an LLM provider (QA_MEMORY_LLM) on the server.",
+      inputSchema: {
+        change: z.string().describe("The proposed change to analyze, in plain language"),
+      },
+    },
+    (args: { change: string }) => {
+      if (!args.change.trim()) {
+        return {
+          content: [{ type: "text" as const, text: "Nothing to analyze — change was empty." }],
+          structuredContent: { ok: false },
+        };
+      }
+      const r = assessor.assess(args.change);
+      if (!r.ok) {
+        return {
+          content: [{ type: "text" as const, text: `Could not analyze: ${r.message}` }],
+          structuredContent: { ok: false, message: r.message },
+        };
+      }
+
+      const section = (title: string, items: string[]) =>
+        items.length === 0
+          ? `${title}\n  (none)`
+          : `${title}\n${items.map((i) => `  • ${i}`).join("\n")}`;
+      const conflicts =
+        r.conflicts.length === 0
+          ? "CONFLICTS\n  (none)"
+          : "CONFLICTS\n" +
+            r.conflicts.map((c) => `  ⚠ ${c.rule}\n    → ${c.why}`).join("\n");
+
+      const text = [
+        `Impact of: "${args.change}"`,
+        "",
+        section("MAY BREAK", r.breaks),
+        "",
+        section("WATCH WHEN TESTING", r.watch),
+        "",
+        conflicts,
+        "",
+        `(reasoned over ${r.relatedRules.length} related rule${r.relatedRules.length === 1 ? "" : "s"}, ${r.tokens} tokens)`,
+      ].join("\n");
+
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: {
+          ok: true,
+          breaks: r.breaks,
+          watch: r.watch,
+          conflicts: r.conflicts,
+          relatedRules: r.relatedRules,
+          tokens: r.tokens,
+        },
       };
     },
   );
