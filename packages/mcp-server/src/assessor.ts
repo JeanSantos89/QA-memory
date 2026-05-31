@@ -18,6 +18,11 @@ export interface ImpactAnalysis {
   tokens: number;
   // Set when ok=false: the subprocess/parse error.
   message?: string;
+  // Set when cross-language retrieval degraded (the LLM could not translate the
+  // query PT<->EN), so only the original language was searched. Surfaced to the
+  // user so they know recall is limited (crosslang.py). Already localized by
+  // Python to the change's language.
+  note?: string | null;
 }
 
 export interface Assessor {
@@ -78,6 +83,7 @@ export class PythonAssessor implements Assessor {
         conflicts?: ImpactConflict[];
         related_rules?: string[];
         tokens?: number;
+        note?: string | null;
       };
       return {
         ok: true,
@@ -86,6 +92,7 @@ export class PythonAssessor implements Assessor {
         conflicts: data.conflicts ?? [],
         relatedRules: data.related_rules ?? [],
         tokens: data.tokens ?? 0,
+        note: data.note ?? null,
       };
     } catch {
       return failed(`could not parse assess output: ${(res.stdout || "").trim()}`);

@@ -446,6 +446,8 @@ export function createServer(
         conflicts,
         "",
         L.reasonedOver(r.relatedRules.length, r.tokens),
+        // Cross-language retrieval degraded → tell the user recall was limited.
+        ...(r.note ? [L.noteLabel(r.note)] : []),
       ].join("\n");
 
       return {
@@ -457,6 +459,7 @@ export function createServer(
           conflicts: r.conflicts,
           relatedRules: r.relatedRules,
           tokens: r.tokens,
+          note: r.note ?? null,
         },
       };
     },

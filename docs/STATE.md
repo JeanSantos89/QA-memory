@@ -3,12 +3,20 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** **ROADMAP DE INFRA FECHADO — Blocos 6–10 CONCLUÍDOS.** 6 (incidents, ADR 022) + 7 (areas, ADR 023) + 8 (fonte file/URL, ADR 024) + 9 (i18n, ADR 025) + 10 (perf assess, ADR 026). Fase 5 antes (`analyze_impact`, ADR 021). **NADA commitado nesta sessão (decisão do usuário: sem commit) — 5 blocos uncommitted na working tree.** Próximo trabalho = não-infra (ver "Futuro"): subagent memory-keeper, conectores nativos, embeddings de rules/incidents, UI. Pedir prioridade ao usuário.
-- **TESTES no fim da sessão:** 83 Vitest ✓ / 65 pytest ✓ / ruff/mypy/typecheck ✓.
+- **Fase atual:** **ROADMAP DE INFRA FECHADO (Blocos 6–10) + Bloco 11 (retrieval cross-idioma, ADR 027) CONCLUÍDO.** 6 (incidents, ADR 022) + 7 (areas, ADR 023) + 8 (fonte file/URL, ADR 024) + 9 (i18n, ADR 025) + 10 (perf assess, ADR 026) + 11 (cross-idioma PT<->EN, ADR 027). Fase 5 antes (`analyze_impact`, ADR 021). **NADA commitado nas sessões recentes (decisão do usuário: sem commit) — blocos uncommitted na working tree.** Próximo trabalho = não-infra (ver "Futuro"): subagent memory-keeper, embeddings de rules/incidents, conectores nativos, UI. Pedir prioridade ao usuário.
+- **TESTES no fim da sessão:** 84 Vitest ✓ / 71 pytest ✓ / ruff/mypy/typecheck ✓.
 - **VALIDAÇÕES AO VIVO FEITAS (2026-05-31, Ollama llama3.1 + qwen2.5:14b, instância tmp):** TODAS passaram. B6: `record_incident`→`query_risk` mostra `⚠ broke:` + razão `+0.30` no score. B7: `query_risk("checkout/pay.ts")`→`[resolved via mapped area]` (path resolveu via glob antes do semântico). B8: `ingest-url example.com` (fetch real, 102 tok) + `ingest-file .md` (roteou p/ texto, 1 behavior). B9: `QA_MEMORY_LANG=pt-BR`→moldura toda em PT (`Risco`/`o que já quebrou`/`PODE QUEBRAR`/`CONFLITOS`/`quebrou:`/`inferida`). B10: `analyze_impact` via MCP→embedder quente subiu, vetor injetado, ponta-a-ponta OK.
-- **ACHADO AO VIVO — GAP CROSS-IDIOMA na retrieval (candidato a bloco futuro):** `analyze_impact` com a mudança em PORTUGUÊS sobre regras gravadas em INGLÊS voltou `conflicts: (nenhum)` + `0 regras relacionadas` — ERRADO (existe `No combining with loyalty discount`). Causa: cosseno baixo entre idiomas + LIKE não casa → retrieval traz 0 → LLM não tem o que confrontar. PROVADO que a mecânica está certa: a MESMA mudança EM INGLÊS retornou o conflito exato (3 regras, 428 tok). NÃO é regressão dos blocos 6–10; é limite da retrieval quando idioma da consulta ≠ idioma da memória. Mitigações possíveis (futuro): embedder multilíngue, normalizar idioma na ingestão/consulta, ou traduzir a query antes do retrieve.
+- **ACHADO AO VIVO — GAP CROSS-IDIOMA na retrieval [✅ RESOLVIDO — Bloco 11, ADR 027]:** era `analyze_impact` com mudança em PORTUGUÊS sobre regras EN voltando `conflicts: (nenhum)` + 0 regras (embedder EN-cêntrico → cosseno < floor + LIKE não casa). RESOLVIDO traduzindo a query PT<->EN antes do retrieve e unindo candidatos (sem reindex). Guarda de LLM: tradução validada; modelo fraco degrada + avisa via `note`. Ver "Último bloco concluído" abaixo.
 
-## Último bloco concluído — perf do assess: reusar embedder quente (ADR 026, Bloco 10)
+## Último bloco concluído — retrieval cross-idioma PT<->EN (ADR 027, Bloco 11)
+- **O QUÊ:** fecha o ACHADO AO VIVO — o ÚNICO furo de produto encontrado funcionando. Query PT sobre regras EN (e vice-versa) agora alcança as regras certas; `analyze_impact` deixa de ficar cego cross-idioma.
+- **COMO:** novo `pipeline/crosslang.py` (`detect_lang` heurística PT/EN sem dep, `translate_query` via LLMClient injetado + validação). `impact.py.retrieve_related` retorna `_Retrieval(related, note)`, recebe `client?`, helper `_collect_candidates` por variante de query → UNIÃO dos candidatos da query original + tradução. `analyze_impact` propaga `note`. CLI `assess` emite `note`. TS: `ImpactAnalysis.note?`, render localizado (`i18n.noteLabel`) + structuredContent.
+- **GUARDA DE LLM (pedido do usuário — robusto entre LLMs):** a tradução é VALIDADA (não-vazia/mudou/não-recusa/idioma-alvo). Modelo fraco devolvendo lixo/eco NÃO contamina; degrada p/ query original + `note` no idioma da mudança sugerindo `QA_MEMORY_LLM_MODEL` mais forte. Self-adapta + transparente; nunca bloqueia.
+- **CUSTO:** +1 chamada LLM curta de tradução por assess (não somada ao usage da análise). Sem dep, sem schema, sem reindex. Embedder monolíngue mantido (trade-off vs reindex).
+- **TESTES:** +6 pytest (detect_lang, translate validação/eco-degrada/sucesso, união de candidatos traduzidos, propagação da nota) + 2 Vitest (render da nota no analyze_impact, i18n noteLabel en/pt). **84 Vitest ✓ / 71 pytest ✓ / ruff/mypy/typecheck ✓.**
+- **VALIDAÇÃO AO VIVO:** PENDENTE (run manual PT→EN com Ollama) — testes cobrem a mecânica com fakes.
+
+## Bloco concluído antes — perf do assess: reusar embedder quente (ADR 026, Bloco 10)
 - **O QUÊ:** `assess` deixou de carregar o modelo de embedding frio a cada chamada via MCP. O servidor embeda a mudança com o daemon QUENTE (ADR 020) e injeta o vetor no subprocess.
 - **COMO:** Python `retrieve_related`/`analyze_impact` aceitam `precomputed_vector` (e `embed_model` opcional); CLI `assess` lê stdin como texto OU `{change,vector?}` JSON. TS `Assessor.assess(change, vector?)`; tool `analyze_impact` virou async (`await embedder.embed` → passa vetor). Degrada p/ frio se embedder null. SEM dep/schema.
 - **TESTES:** +1 pytest (encode nunca chamado com vetor) + 1 Vitest (vetor repassado). **83 Vitest ✓ / 65 pytest ✓.**
@@ -112,11 +120,28 @@ Ordem pensada p/ maximizar valor de QA por bloco, mantendo a regra "1 bloco = un
 - **Por quê:** ADR 021 registrou — `assess` carrega o modelo de embedding FRIO a cada chamada (não usa o daemon quente do query path, ~9s de penalidade). Análoga ao cold-start que o ADR 020 resolveu p/ query.
 - **Escopo:** retrieval do `impact.py` consome o mesmo `embed-serve` quente (ou o MCP injeta o vetor já embedado via o PersistentEmbedder e passa pro subprocess). Medir antes/depois. ADR 026.
 
+### Bloco 11 — retrieval cross-idioma PT<->EN [✅ CONCLUÍDO — ADR 027]
+- Fechou o ACHADO AO VIVO. Traduzir a query antes do retrieve + união de candidatos, com guarda de LLM (degrada+avisa). Ver "Último bloco concluído".
+
 ### Futuro (sem bloco ainda — depende de prioridade do usuário)
-- **Subagent/skill "memory-keeper"** automatizado (cuida da memória sozinho — sync, dedup, confirma inferências). É a inteligência no AGENTE (ADR 014), não em conector.
-- **Conectores nativos + scheduler** (Jira/Confluence/Drive, Atlassian token). Hoje é agente-alimentado por decisão (ADR 014); nativo só quando o subagent existir.
-- **UI dedicada (C)** — ADIADA, só se não-técnico virar prioridade (usuário avisa).
+- **Subagent/skill "memory-keeper"** automatizado (cuida da memória sozinho — sync, dedup, confirma inferências; hoje regras entram como inferred 0.60 e ninguém promove a QA-confirmed). É a inteligência no AGENTE (ADR 014), não em conector. **PRÓXIMO recomendado** (item de maior valor agora que o furo de produto cross-idioma fechou).
 - **Embeddings de rules/incidents** (hoje só behaviors são embedados) — melhora recall quando o volume crescer.
+- **Conectores nativos + scheduler** (Jira/Confluence/Drive, Atlassian token). Hoje é agente-alimentado por decisão (ADR 014); nativo só quando o subagent existir.
+- **i18n 2ª passada** — `prompts.ts` + `cli.ts` seguem EN (débito do ADR 025). Baixo valor.
+- **UI dedicada (C)** — ADIADA, só se não-técnico virar prioridade (usuário avisa).
+
+### PENDÊNCIA registrada (2026-05-31) — tooling do repo, decidir DEPOIS do projeto completo
+> Usuário pediu p/ MARCAR, não implementar agora. Decidir o conjunto quando o produto estiver fechado.
+- **Agentes (`.claude/agents/`)** p/ manutenção fácil — candidatos levantados (escolher quais valem a pena):
+  - `memory-keeper` — promove regras inferred 0.60 → QA-confirmed, dedup, sync (é o subagent do ADR 014, já no Futuro acima).
+  - `block-runner` — encarna "1 bloco = unidade + testes + doc + 1 commit"; roda vitest/pytest/ruff/mypy + atualiza doc vivo antes do commit.
+  - `neutrality-auditor` — automatiza o ADR 010 (varre creds/Jira real/empresa/URLs internas a cada commit ou antes de tornar público).
+  - `doc-healer` — escreve a atualização dos docs vivos (STATE/DECISIONS/SCHEMA) a partir do diff (o hook só BLOQUEIA; este de fato preenche).
+- **Skills token-friendly** — candidatos (decidir):
+  - `/fewer-permission-prompts` (built-in) — allowlist de comandos read-only (git/uv/pnpm/pytest) no `.claude/settings.json` → menos prompts.
+  - skill de projeto `qa-block` — encapsula o fluxo de bloco em poucos tokens (embute as regras do CLAUDE.md, não re-explica toda vez).
+  - skill de projeto `qa-validate` — roda os 4 (vitest+pytest+ruff+mypy+typecheck) com os PATH/env desta máquina num comando.
+- **PRÓXIMOS PASSOS PÓS-PROJETO (ordem sugerida quando o produto fechar):** (1) escolher + criar os agentes acima; (2) instalar as skills; (3) rodar `/fewer-permission-prompts`; (4) decidir tornar o repo público (com `neutrality-auditor` passando). Isto é tooling de manutenção, não feature de produto — fica por último.
 
 ## Decisões em aberto
 - Reordenar fontes: usuário tem conhecimento "na cabeça" + Confluence + Jira (não PDF como prioridade real). PDF continua sendo a 1ª fonte IMPLEMENTADA (simples, sem auth, fácil de testar), mas Jira+Confluence (Atlassian, mesmo token) sobem na prioridade logo após. "Na cabeça" → via update_rule (conversa).
@@ -127,7 +152,8 @@ Ordem pensada p/ maximizar valor de QA por bloco, mantendo a regra "1 bloco = un
 - Repo = SÓ código/docs/exemplos neutros. Conhecimento real do produto NUNCA é commitado.
 - `.qa-memory/` inteiro é git-ignored (DB + config real + creds). Tokens via env var.
 - Usuário pode apontar instância local pro produto do trabalho sem exposição. Repo pode ser dogfood (qa-memory sobre si mesmo) p/ exemplos compartilháveis.
-- **Repo público — auditado em 2026-05-30:** histórico limpo (sem creds/tokens/URLs internas/nome de empresa/dados de cliente). Único vazamento: `PROJ-3053` (chave Jira real) em `docs/SCHEMA.md` → trocado por `PROJ-123` neutro. Após esse fix, repo OK p/ tornar público. Email pessoal no author é intencional.
+- **Repo público — auditado em 2026-05-30:** histórico limpo (sem creds/tokens/URLs internas/nome de empresa/dados de cliente). Único vazamento: uma chave Jira de projeto interno em `docs/SCHEMA.md` → trocada por `PROJ-123` neutro. Após esse fix, repo OK p/ tornar público. Email pessoal no author é intencional.
+- **Re-auditado em 2026-05-31 (antes do push do Bloco 11):** working tree varrida por creds (sk-ant/AKIA/ghp/bearer), chaves Jira reais, nome de empresa e domínio interno — limpa. `.gitignore` cobre `.qa-memory/`, `.env`, `.venv`, `*.token`, `**/google-creds.json`; nada sensível trackado. Docs vivos neutralizados: a chave/projeto interno citado por extenso no ADR 010 + STATE foi trocado por "projeto interno" (código já era neutro).
 
 ## Notas para o próximo chat
 - Git: remote `JeanSantos89/qa-memory` (privado), identidade LOCAL JeanSantos89 / jeansaantos89@gmail.com. Token no GCM.

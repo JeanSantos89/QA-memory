@@ -176,6 +176,7 @@ def assess(
                 "conflicts": [{"rule": c.rule, "why": c.why} for c in result.conflicts],
                 "related_rules": result.related_rules,
                 "tokens": result.usage.total,
+                "note": result.note,
             }
         )
     )
