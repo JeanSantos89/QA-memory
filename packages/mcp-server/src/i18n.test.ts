@@ -21,6 +21,7 @@ describe("getLabels", () => {
     const L = getLabels({});
     expect(L.sectionMayBreak).toBe("MAY BREAK");
     expect(L.riskHeader("HIGH", "0.90", "checkout", "")).toContain("Risk: HIGH");
+    expect(L.noteLabel("limited")).toContain("Note:");
   });
 
   it("returns Portuguese frame when QA_MEMORY_LANG=pt-BR", () => {
@@ -28,5 +29,6 @@ describe("getLabels", () => {
     expect(L.sectionMayBreak).toBe("PODE QUEBRAR");
     expect(L.riskHeader("HIGH", "0.90", "checkout", "")).toContain("Risco: HIGH");
     expect(L.reasonNoCoverage).toContain("não tem cobertura");
+    expect(L.noteLabel("limitada")).toContain("Nota:");
   });
 });

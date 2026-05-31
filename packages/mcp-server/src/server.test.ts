@@ -424,6 +424,24 @@ describe("analyze_impact tool over MCP", () => {
     })) as { structuredContent?: { ok: boolean } };
     expect(res.structuredContent?.ok).toBe(false);
   });
+
+  it("surfaces the cross-language degrade note when present (Bloco 11)", async () => {
+    const spy = spyAssessor({
+      ...okAnalysis,
+      note: "Cross-language retrieval limited: try a stronger QA_MEMORY_LLM_MODEL.",
+    });
+    const client = await connectedClient(undefined, spy);
+    const res = (await client.callTool({
+      name: "analyze_impact",
+      arguments: { change: "regras de cancelamento" },
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: { note?: string | null };
+    };
+    expect(res.content[0]?.text).toContain("Note:");
+    expect(res.content[0]?.text).toContain("Cross-language retrieval limited");
+    expect(res.structuredContent?.note).toContain("QA_MEMORY_LLM_MODEL");
+  });
 });
 
 describe("guided surface (Block B)", () => {

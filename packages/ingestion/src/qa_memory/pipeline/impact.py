@@ -20,6 +20,7 @@ import sqlite3
 from array import array
 from dataclasses import dataclass, field
 
+from qa_memory.pipeline.crosslang import translate_query
 from qa_memory.pipeline.embeddings import EMBEDDING_DIM, EmbeddingModel
 from qa_memory.pipeline.extractor import TokenUsage, _parse_json
 from qa_memory.pipeline.llm import LLMClient
@@ -63,6 +64,9 @@ class ImpactAnalysis:
     conflicts: list[Conflict] = field(default_factory=list)
     related_rules: list[str] = field(default_factory=list)
     usage: TokenUsage = field(default_factory=TokenUsage)
+    # Set when cross-language retrieval degraded (LLM couldn't translate the
+    # query); surfaced to the user so they know recall is limited (crosslang.py).
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,15 @@ class _RelatedBehavior:
     name: str
     description: str
     rules: list[str]
+
+
+@dataclass
+class _Retrieval:
+    """retrieve_related's result: the related behaviors + an optional degrade
+    note when cross-language translation couldn't be trusted (crosslang.py)."""
+
+    related: list[_RelatedBehavior]
+    note: str | None = None
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -97,44 +110,18 @@ def _rules_for(conn: sqlite3.Connection, behavior_id: str) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
-def retrieve_related(
+def _collect_candidates(
     conn: sqlite3.Connection,
-    change: str,
-    embed_model: EmbeddingModel | None,
-    limit: int = RETRIEVAL_LIMIT,
-    precomputed_vector: list[float] | None = None,
-) -> list[_RelatedBehavior]:
-    """Find behaviors related to the proposed change: semantic over behavior
-    embeddings (cosine >= floor), backfilled with LIKE matches. Mirrors
-    search.ts so analysis sees the same candidates the query tools would.
-
-    If `precomputed_vector` is given (the MCP server embeds the change with its
-    WARM embedder, ADR 020/026), the cold model load here is skipped entirely —
-    `embed_model` may then be None. Otherwise the change is embedded locally.
-    """
-    q = change.strip()
-    if not q:
-        return []
-
-    # Lexical (LIKE) candidates — active behaviors only.
-    like = f"%{q}%"
-    lexical_rows = conn.execute(
-        """SELECT id, name, description FROM behaviors
-             WHERE status != 'deprecated'
-               AND (name LIKE ? OR description LIKE ?)
-             LIMIT ?""",
-        (like, like, limit),
-    ).fetchall()
-
-    # Semantic candidates — rank latest behavior embedding by cosine.
-    ordered_ids: list[str] = []
-    meta: dict[str, tuple[str, str]] = {}
-    if precomputed_vector is not None:
-        query_vec = precomputed_vector
-    elif embed_model is not None:
-        query_vec = embed_model.encode([q])[0]
-    else:
-        query_vec = []
+    query: str,
+    query_vec: list[float],
+    ordered_ids: list[str],
+    meta: dict[str, tuple[str, str]],
+    limit: int,
+) -> None:
+    """Add this query's semantic+LIKE candidates to ordered_ids/meta in place,
+    skipping ids already seen. Semantic first (ranked by cosine), then LIKE
+    backfill — mirrors search.ts. Called once per query variant so the original
+    and the translated query UNION their candidates (cross-language recall)."""
     if len(query_vec) == EMBEDDING_DIM:
         emb_rows = conn.execute(
             """SELECT e.entity_id, e.vector, b.name, b.description
@@ -149,20 +136,83 @@ def retrieve_related(
                 scored.append((score, str(entity_id), str(name), str(desc)))
         scored.sort(key=lambda t: t[0], reverse=True)
         for _score, bid, name, desc in scored:
-            ordered_ids.append(bid)
-            meta[bid] = (name, desc)
+            if bid not in meta:
+                ordered_ids.append(bid)
+                meta[bid] = (name, desc)
 
-    # Backfill with lexical matches not already surfaced semantically.
+    # Lexical (LIKE) candidates — active behaviors only.
+    like = f"%{query}%"
+    lexical_rows = conn.execute(
+        """SELECT id, name, description FROM behaviors
+             WHERE status != 'deprecated'
+               AND (name LIKE ? OR description LIKE ?)
+             LIMIT ?""",
+        (like, like, limit),
+    ).fetchall()
     for bid, name, desc in lexical_rows:
         if str(bid) not in meta:
             ordered_ids.append(str(bid))
             meta[str(bid)] = (str(name), str(desc))
 
+
+def retrieve_related(
+    conn: sqlite3.Connection,
+    change: str,
+    embed_model: EmbeddingModel | None,
+    limit: int = RETRIEVAL_LIMIT,
+    precomputed_vector: list[float] | None = None,
+    client: LLMClient | None = None,
+) -> _Retrieval:
+    """Find behaviors related to the proposed change: semantic over behavior
+    embeddings (cosine >= floor), backfilled with LIKE matches. Mirrors
+    search.ts so analysis sees the same candidates the query tools would.
+
+    If `precomputed_vector` is given (the MCP server embeds the change with its
+    WARM embedder, ADR 020/026), the cold model load here is skipped for the
+    ORIGINAL query — `embed_model` may then be None.
+
+    Cross-language (PT<->EN): when `client` is given, the query is also
+    translated to the other language and its candidates UNIONed in, so a PT
+    query reaches EN-stored rules and vice versa. The all-MiniLM embedder is
+    English-centric, so without this a cross-language query returns 0 (proven
+    live, STATE). If the LLM can't produce a trustworthy translation, retrieval
+    degrades to the original query and a note is returned. `embed_model` (cold)
+    embeds the translation when available; otherwise the translation falls back
+    to LIKE-only. No reindexing of stored vectors.
+    """
+    q = change.strip()
+    if not q:
+        return _Retrieval(related=[])
+
+    ordered_ids: list[str] = []
+    meta: dict[str, tuple[str, str]] = {}
+
+    # Original-language pass.
+    if precomputed_vector is not None:
+        orig_vec = precomputed_vector
+    elif embed_model is not None:
+        orig_vec = embed_model.encode([q])[0]
+    else:
+        orig_vec = []
+    _collect_candidates(conn, q, orig_vec, ordered_ids, meta, limit)
+
+    # Cross-language pass: translate to the other PT<->EN language and union.
+    note: str | None = None
+    if client is not None:
+        translation, degrade_note = translate_query(q, client)
+        if translation:
+            # Embed the translation cold if a model is on hand; the precomputed
+            # vector only covers the original query's language.
+            trans_vec = embed_model.encode([translation])[0] if embed_model else []
+            _collect_candidates(conn, translation, trans_vec, ordered_ids, meta, limit)
+        else:
+            note = degrade_note
+
     out: list[_RelatedBehavior] = []
     for bid in ordered_ids[:limit]:
         name, desc = meta[bid]
         out.append(_RelatedBehavior(bid, name, desc, _rules_for(conn, bid)))
-    return out
+    return _Retrieval(related=out, note=note)
 
 
 def _build_user_prompt(change: str, related: list[_RelatedBehavior]) -> str:
@@ -190,9 +240,14 @@ def analyze_impact(
 
     Deps injected (client + embed_model are Protocols) → unit-testable with
     fakes, no network/torch/key. Pass `precomputed_vector` to reuse a warm
-    embedding and skip the cold model load (ADR 026).
+    embedding and skip the cold model load (ADR 026). The same `client` drives
+    cross-language retrieval (PT<->EN) so the analysis sees rules stored in the
+    other language; if it can't translate, a `note` flags degraded recall.
     """
-    related = retrieve_related(conn, change, embed_model, limit, precomputed_vector)
+    retrieval = retrieve_related(
+        conn, change, embed_model, limit, precomputed_vector, client
+    )
+    related = retrieval.related
     related_rules = [r for b in related for r in b.rules]
 
     resp = client.complete(
@@ -224,4 +279,5 @@ def analyze_impact(
         conflicts=conflicts,
         related_rules=related_rules,
         usage=usage,
+        note=retrieval.note,
     )

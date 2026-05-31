@@ -31,6 +31,7 @@ export interface Labels {
   sectionConflicts: string;
   none: string;
   reasonedOver: (n: number, tokens: number) => string;
+  noteLabel: (note: string) => string; // frame around a degraded-retrieval note
 }
 
 const EN: Labels = {
@@ -55,6 +56,7 @@ const EN: Labels = {
   none: "(none)",
   reasonedOver: (n, tokens) =>
     `(reasoned over ${n} related rule${n === 1 ? "" : "s"}, ${tokens} tokens)`,
+  noteLabel: (note) => `⚠ Note: ${note}`,
 };
 
 const PT_BR: Labels = {
@@ -82,6 +84,7 @@ const PT_BR: Labels = {
   none: "(nenhum)",
   reasonedOver: (n, tokens) =>
     `(analisado sobre ${n} regra${n === 1 ? "" : "s"} relacionada${n === 1 ? "" : "s"}, ${tokens} tokens)`,
+  noteLabel: (note) => `⚠ Nota: ${note}`,
 };
 
 const TABLE: Record<Lang, Labels> = { en: EN, "pt-BR": PT_BR };

@@ -98,7 +98,7 @@ def test_retrieve_related_semantic_match() -> None:
                    [("charge on confirm", 0.9)], _vec(5))
 
     embed = FakeEmbed({"cancel": 0})  # query aligns with b1's vector slot
-    related = retrieve_related(conn, "change cancel rules", embed)
+    related = retrieve_related(conn, "change cancel rules", embed).related
 
     assert [b.behavior_id for b in related] == ["b1"]
     assert related[0].rules == ["free cancel before accept"]
@@ -108,7 +108,7 @@ def test_retrieve_hides_under_review_rules() -> None:
     conn = _conn()
     _seed_behavior(conn, "b1", "Cancellation", "Order cancellation flow",
                    [("solid rule", 0.9), ("shaky rule", 0.3)], _vec(0))
-    related = retrieve_related(conn, "cancel", FakeEmbed({"cancel": 0}))
+    related = retrieve_related(conn, "cancel", FakeEmbed({"cancel": 0})).related
     assert related[0].rules == ["solid rule"]  # confidence 0.3 hidden
 
 
@@ -153,11 +153,13 @@ def test_retrieve_uses_precomputed_vector_and_skips_model() -> None:
             raise AssertionError("encode() must not be called when a vector is precomputed")
 
     # Warm vector aligned with b1's slot; embed_model is None entirely.
-    related = retrieve_related(conn, "anything", None, precomputed_vector=_vec(0))
+    related = retrieve_related(conn, "anything", None, precomputed_vector=_vec(0)).related
     assert [b.behavior_id for b in related] == ["b1"]
 
     # And with a model present, it is NOT used when a vector is given.
-    related2 = retrieve_related(conn, "anything", BoomEmbed(), precomputed_vector=_vec(0))
+    related2 = retrieve_related(
+        conn, "anything", BoomEmbed(), precomputed_vector=_vec(0)
+    ).related
     assert [b.behavior_id for b in related2] == ["b1"]
 
 
@@ -181,3 +183,93 @@ def test_analyze_impact_malformed_json_degrades() -> None:
     assert result.breaks == []
     assert result.watch == []
     assert result.conflicts == []
+
+
+# --- Cross-language retrieval (PT<->EN), crosslang.py ------------------------
+
+from qa_memory.pipeline.crosslang import detect_lang, translate_query  # noqa: E402
+
+
+class TranslatingLLM:
+    """Returns `translation` for the translate call (system has 'translator'),
+    and `analysis` (JSON) for the analyze call. Records both prompts."""
+
+    def __init__(self, translation: str, analysis: dict[str, object] | None = None) -> None:
+        self._translation = translation
+        self._analysis = analysis or {"breaks": [], "watch": ["x"], "conflicts": []}
+        self.translate_input: str | None = None
+
+    def complete(self, system: str, user: str, max_tokens: int) -> LLMResponse:
+        if "translator" in system.lower():
+            self.translate_input = user
+            return LLMResponse(self._translation, 5, 5)
+        return LLMResponse(json.dumps(self._analysis), 40, 60)
+
+
+def test_detect_lang_pt_vs_en() -> None:
+    assert detect_lang("permitir cancelamento após o restaurante aceitar") == "pt"
+    assert detect_lang("regra de cancelamento") == "pt"  # accent + PT marker
+    assert detect_lang("allow cancellation after restaurant accepts") == "en"
+
+
+def test_translate_query_degrades_on_echo() -> None:
+    # A model that echoes the input is no translation → degrade + note.
+    change = "permitir cancelamento grátis"
+    llm = TranslatingLLM(translation=change)  # echoes
+    translation, note = translate_query(change, llm)
+    assert translation is None
+    assert note is not None and "QA_MEMORY_LLM_MODEL" in note
+
+
+def test_translate_query_succeeds() -> None:
+    llm = TranslatingLLM(translation="allow free cancellation")
+    translation, note = translate_query("permitir cancelamento grátis", llm)
+    assert translation == "allow free cancellation"
+    assert note is None
+
+
+def test_retrieve_unions_translated_candidates() -> None:
+    """PT query → EN-stored behavior found ONLY via the translated query.
+
+    The PT query embeds to slot 1 (no match) and LIKE can't match the English
+    name; the translation embeds to slot 0, which aligns with the seeded
+    behavior. Without cross-language, retrieval would be empty.
+    """
+    conn = _conn()
+    _seed_behavior(conn, "b1", "Cancellation", "Free cancellation window",
+                   [("no combining with loyalty discount", 0.9)], _vec(0))
+
+    # PT markers map to slot 1 (miss); the EN translation maps to slot 0 (hit).
+    embed = FakeEmbed({"cancelamento": 1, "cancellation": 0})
+    llm = TranslatingLLM(translation="cancellation rules")
+
+    retrieval = retrieve_related(
+        conn, "regras de cancelamento", embed, client=llm
+    )
+    assert [b.behavior_id for b in retrieval.related] == ["b1"]
+    assert retrieval.note is None
+    # The original PT query was the input to the translator.
+    assert "cancelamento" in (llm.translate_input or "")
+
+
+def test_retrieve_degrades_with_note_on_bad_translation() -> None:
+    conn = _conn()
+    _seed_behavior(conn, "b1", "Cancellation", "Free cancellation window",
+                   [("rule", 0.9)], _vec(0))
+    # Echoes the PT input → no usable translation → note, original-only search.
+    llm = TranslatingLLM(translation="regras de cancelamento")
+    retrieval = retrieve_related(
+        conn, "regras de cancelamento", FakeEmbed({"cancelamento": 5}), client=llm
+    )
+    assert retrieval.note is not None
+
+
+def test_analyze_impact_surfaces_degrade_note() -> None:
+    conn = _conn()
+    _seed_behavior(conn, "b1", "Cancellation", "Free cancellation window",
+                   [("rule", 0.9)], _vec(0))
+    llm = TranslatingLLM(translation="regras de cancelamento")  # echo → degrade
+    result = analyze_impact(
+        conn, "regras de cancelamento", llm, FakeEmbed({"cancelamento": 5})
+    )
+    assert result.note is not None and "QA_MEMORY_LLM_MODEL" in result.note
