@@ -444,6 +444,90 @@ describe("analyze_impact tool over MCP", () => {
   });
 });
 
+describe("review_memory tool over MCP (curation queue)", () => {
+  // DB with a mix: one QA-confirmed rule, one inferred, one under_review.
+  async function clientWithPending() {
+    const db = openDb(":memory:");
+    const bid = insertBehavior(db, {
+      name: "Coupon redemption",
+      description: "Applies a discount coupon at checkout",
+      criticality: "P1",
+    });
+    insertRule(db, { behavior_id: bid, rule_text: "QA pinned rule", confidence: 1.0, qa_override: true });
+    insertRule(db, { behavior_id: bid, rule_text: "One coupon per order", confidence: 0.6 });
+    insertRule(db, { behavior_id: bid, rule_text: "Maybe stackable", confidence: 0.3 });
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  }
+
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("review_memory");
+  });
+
+  it("surfaces inferred + under_review rules with ids, flags under_review, excludes QA-confirmed", async () => {
+    const client = await clientWithPending();
+    const res = (await client.callTool({
+      name: "review_memory",
+      arguments: {},
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: {
+        count: number;
+        total: number;
+        pending: Array<{ rule: { rule_text: string; id: string }; under_review: boolean }>;
+      };
+    };
+    const text = res.content[0]?.text ?? "";
+    expect(text).toContain("awaiting QA confirmation");
+    expect(text).toContain("One coupon per order");
+    expect(text).toContain("Maybe stackable");
+    expect(text).toContain("UNDER REVIEW");
+    expect(text).not.toContain("QA pinned rule");
+    // weakest first; under_review flagged; both carry an id for update_rule.
+    expect(res.structuredContent?.count).toBe(2);
+    expect(res.structuredContent?.pending[0]?.rule.rule_text).toBe("Maybe stackable");
+    expect(res.structuredContent?.pending[0]?.under_review).toBe(true);
+    expect(res.structuredContent?.pending[0]?.rule.id).toBeTruthy();
+  });
+
+  it("reports a clean queue when every rule is QA-confirmed", async () => {
+    const client = await connectedClient(); // seeds only a qa_override rule
+    const res = (await client.callTool({
+      name: "review_memory",
+      arguments: {},
+    })) as { content: Array<{ text: string }>; structuredContent?: { count: number } };
+    expect(res.structuredContent?.count).toBe(0);
+    expect(res.content[0]?.text).toContain("Nothing awaiting confirmation");
+  });
+
+  it("promoting a pending rule via update_rule removes it from the queue", async () => {
+    const client = await clientWithPending();
+    const before = (await client.callTool({
+      name: "review_memory",
+      arguments: {},
+    })) as { structuredContent?: { pending: Array<{ rule: { id: string; rule_text: string } }> } };
+    const target = before.structuredContent?.pending.find((p) => p.rule.rule_text === "One coupon per order");
+    expect(target?.rule.id).toBeTruthy();
+
+    await client.callTool({
+      name: "update_rule",
+      arguments: { rule_id: target!.rule.id, rule_text: "One coupon per order", reason: "QA confirmed" },
+    });
+
+    const after = (await client.callTool({
+      name: "review_memory",
+      arguments: {},
+    })) as { structuredContent?: { count: number; pending: Array<{ rule: { rule_text: string } }> } };
+    expect(after.structuredContent?.pending.map((p) => p.rule.rule_text)).not.toContain("One coupon per order");
+    expect(after.structuredContent?.count).toBe(1); // only the under_review one remains
+  });
+});
+
 describe("guided surface (Block B)", () => {
   it("lists the getting_started and assess_change prompts", async () => {
     const client = await connectedClient();

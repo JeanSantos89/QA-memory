@@ -103,6 +103,41 @@ export function listRulesForBehaviors(
   return rows.map(hydrate);
 }
 
+// A rule awaiting QA confirmation, paired with its behavior's context so the
+// reviewer (memory-keeper) can judge it without a second lookup.
+export interface PendingRule {
+  rule: Rule;
+  behavior_name: string;
+  behavior_criticality: string;
+  under_review: boolean; // confidence < UNDER_REVIEW_BELOW (hidden from normal MCP reads)
+}
+
+// Rules the QA never confirmed (qa_override = 0) — the promotion queue the
+// memory-keeper curates. INCLUDES under_review rules (confidence < 0.5), which
+// are invisible to every other MCP read: this is the one surface that can
+// rescue or discard a weak inference. Excludes deprecated behaviors. Weakest
+// confidence first (most in need of a human call), then oldest.
+export function listUnconfirmedRules(db: Database): PendingRule[] {
+  const rows = db
+    .prepare(
+      `SELECT r.*, b.name AS behavior_name, b.criticality AS behavior_criticality
+         FROM rules r
+         JOIN behaviors b ON b.id = r.behavior_id
+        WHERE r.qa_override = 0 AND b.status != 'deprecated'
+        ORDER BY r.confidence ASC, r.created_at ASC`,
+    )
+    .all() as (RuleRow & { behavior_name: string; behavior_criticality: string })[];
+  return rows.map((row) => {
+    const { behavior_name, behavior_criticality, ...ruleRow } = row;
+    return {
+      rule: hydrate(ruleRow),
+      behavior_name,
+      behavior_criticality,
+      under_review: ruleRow.confidence < UNDER_REVIEW_BELOW,
+    };
+  });
+}
+
 export function getRuleById(db: Database, id: string): Rule | null {
   const row = db.prepare("SELECT * FROM rules WHERE id = ?").get(id) as
     | RuleRow
