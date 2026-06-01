@@ -6,6 +6,8 @@ import { behaviorsByIds, countBehaviors, queryBehavior } from "./repo/behaviors.
 import { behaviorIdsForPath, insertArea } from "./repo/areas.js";
 import { emptyStateHint, registerPrompts } from "./prompts.js";
 import {
+  DEFAULT_DUP_THRESHOLD,
+  findDuplicateRules,
   getRuleById,
   insertRule,
   listRulesForBehaviors,
@@ -404,6 +406,75 @@ export function createServer(
       return {
         content: [{ type: "text" as const, text: `${header}\n\n${blocks}\n\n${footer}` }],
         structuredContent: { count: pending.length, total: all.length, pending },
+      };
+    },
+  );
+
+  server.registerTool(
+    "find_duplicate_rules",
+    {
+      title: "Find duplicate / near-duplicate rules",
+      description:
+        "Detect clusters of rules that say the same thing — the memory-keeper's dedup signal. " +
+        "Two rules cluster when their normalized text is identical or their word overlap crosses the threshold; " +
+        "clusters can span behaviors and include under_review rules. " +
+        "Detection only — it NEVER merges or deletes. Surface the clusters, then let the user decide which to keep " +
+        "(promote the canonical one via update_rule). Read-only.",
+      inputSchema: {
+        threshold: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(`Token-overlap cutoff 0..1 to treat two rules as duplicates (default ${DEFAULT_DUP_THRESHOLD}).`),
+      },
+    },
+    (args: { threshold?: number }) => {
+      const clusters = findDuplicateRules(db, args.threshold ?? DEFAULT_DUP_THRESHOLD);
+
+      if (clusters.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                countBehaviors(db) === 0
+                  ? emptyStateHint()
+                  : "No duplicate rules found — memory looks deduplicated.",
+            },
+          ],
+          structuredContent: { count: 0, clusters: [] },
+        };
+      }
+
+      const blocks = clusters
+        .map((group, i) => {
+          const lines = group
+            .map((d) => {
+              const flag = d.rule.qa_override
+                ? "QA"
+                : d.rule.confidence < 0.5
+                  ? `${d.rule.confidence.toFixed(2)}, UNDER REVIEW`
+                  : d.rule.confidence.toFixed(2);
+              return `  - "${d.rule.rule_text}" [${flag}, ${d.behavior_name}, id ${d.rule.id}]`;
+            })
+            .join("\n");
+          return `Cluster ${i + 1} (${group.length} rules):\n${lines}`;
+        })
+        .join("\n\n");
+
+      const footer =
+        "Each cluster is a likely duplicate. Decide with the user which wording to keep, " +
+        "promote the canonical rule via update_rule, and flag the rest for retirement.";
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${clusters.length} duplicate cluster(s):\n\n${blocks}\n\n${footer}`,
+          },
+        ],
+        structuredContent: { count: clusters.length, clusters },
       };
     },
   );

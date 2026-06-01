@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../db/index.js";
 import { insertBehavior } from "./behaviors.js";
 import {
+  findDuplicateRules,
   insertRule,
   listRulesForBehaviors,
   listUnconfirmedRules,
+  normalizeRuleText,
   overrideRule,
 } from "./rules.js";
 
@@ -83,6 +85,65 @@ describe("rules repo", () => {
       const bid = insertBehavior(db, { name: "B", description: "d", criticality: "P1" });
       insertRule(db, { behavior_id: bid, rule_text: "pinned", confidence: 1.0, qa_override: true });
       expect(listUnconfirmedRules(db)).toEqual([]);
+    });
+  });
+
+  describe("findDuplicateRules (dedup signal)", () => {
+    it("normalizeRuleText lowercases, strips punctuation, collapses, keeps accents", () => {
+      expect(normalizeRuleText("  One COUPON, per order! ")).toBe("one coupon per order");
+      expect(normalizeRuleText("Cancelamento até 5min")).toBe("cancelamento até 5min");
+    });
+
+    it("clusters exact + near-duplicate rules, ignoring punctuation/case", () => {
+      const db = openDb(":memory:");
+      const bid = insertBehavior(db, { name: "Coupon", description: "d", criticality: "P1" });
+      insertRule(db, { behavior_id: bid, rule_text: "One coupon per order" });
+      insertRule(db, { behavior_id: bid, rule_text: "one coupon, per order!" }); // exact after normalize
+      insertRule(db, { behavior_id: bid, rule_text: "Free shipping over 100" }); // unrelated
+      const clusters = findDuplicateRules(db);
+      expect(clusters).toHaveLength(1);
+      expect(clusters[0]).toHaveLength(2);
+      expect(clusters[0]!.map((d) => d.rule.rule_text).sort()).toEqual([
+        "One coupon per order",
+        "one coupon, per order!",
+      ]);
+    });
+
+    it("clusters duplicates across different behaviors and carries behavior names", () => {
+      const db = openDb(":memory:");
+      const b1 = insertBehavior(db, { name: "Checkout", description: "d", criticality: "P1" });
+      const b2 = insertBehavior(db, { name: "Cart", description: "d", criticality: "P2" });
+      insertRule(db, { behavior_id: b1, rule_text: "Cart locks during payment" });
+      insertRule(db, { behavior_id: b2, rule_text: "The cart locks during payment" });
+      const clusters = findDuplicateRules(db);
+      expect(clusters).toHaveLength(1);
+      expect(clusters[0]!.map((d) => d.behavior_name).sort()).toEqual(["Cart", "Checkout"]);
+    });
+
+    it("respects the threshold: partial overlap clusters only when loose enough", () => {
+      const db = openDb(":memory:");
+      const bid = insertBehavior(db, { name: "B", description: "d", criticality: "P2" });
+      // Share "password reset link" (3 tokens) → Jaccard ≈ 0.30.
+      insertRule(db, { behavior_id: bid, rule_text: "Password reset link expires in 15 minutes" });
+      insertRule(db, { behavior_id: bid, rule_text: "Password reset link is single use" });
+      expect(findDuplicateRules(db)).toEqual([]); // default 0.7 → too strict to cluster
+      expect(findDuplicateRules(db, 0.2).length).toBeGreaterThan(0); // loose → clusters
+    });
+
+    it("returns no cluster for rules with no shared words", () => {
+      const db = openDb(":memory:");
+      const bid = insertBehavior(db, { name: "B", description: "d", criticality: "P2" });
+      insertRule(db, { behavior_id: bid, rule_text: "Password reset link expires in fifteen minutes" });
+      insertRule(db, { behavior_id: bid, rule_text: "Account locks after three failed logins" });
+      expect(findDuplicateRules(db)).toEqual([]);
+    });
+
+    it("excludes rules under deprecated behaviors", () => {
+      const db = openDb(":memory:");
+      const bid = insertBehavior(db, { name: "Old", description: "d", criticality: "P3", status: "deprecated" });
+      insertRule(db, { behavior_id: bid, rule_text: "same text here" });
+      insertRule(db, { behavior_id: bid, rule_text: "same text here" });
+      expect(findDuplicateRules(db)).toEqual([]);
     });
   });
 });
