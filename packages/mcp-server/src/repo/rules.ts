@@ -6,6 +6,11 @@ import type { Database } from "better-sqlite3";
 // Rules below this confidence are under_review (hidden from MCP consumers).
 export const UNDER_REVIEW_BELOW = 0.5;
 
+// Lifecycle of a rule. 'active' = live; 'superseded' = retired by QA (e.g. a
+// duplicate replaced by a canonical one) — hidden from every read. Distinct
+// from confidence, which is the strength of the inference.
+export type RuleStatus = "active" | "superseded";
+
 export interface Rule {
   id: string;
   behavior_id: string;
@@ -15,6 +20,7 @@ export interface Rule {
   source_id: string | null;
   qa_override: boolean;
   override_reason: string | null;
+  status: RuleStatus;
   created_at: string;
   updated_at: string;
 }
@@ -28,6 +34,7 @@ interface RuleRow {
   source_id: string | null;
   qa_override: number;
   override_reason: string | null;
+  status: string;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +49,7 @@ function hydrate(row: RuleRow): Rule {
     source_id: row.source_id,
     qa_override: row.qa_override === 1,
     override_reason: row.override_reason,
+    status: row.status as RuleStatus,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -96,7 +104,7 @@ export function listRulesForBehaviors(
   const rows = db
     .prepare(
       `SELECT * FROM rules
-       WHERE behavior_id IN (${placeholders}) AND confidence >= ?
+       WHERE behavior_id IN (${placeholders}) AND confidence >= ? AND status = 'active'
        ORDER BY qa_override DESC, confidence DESC, created_at DESC`,
     )
     .all(...behaviorIds, UNDER_REVIEW_BELOW) as RuleRow[];
@@ -123,7 +131,7 @@ export function listUnconfirmedRules(db: Database): PendingRule[] {
       `SELECT r.*, b.name AS behavior_name, b.criticality AS behavior_criticality
          FROM rules r
          JOIN behaviors b ON b.id = r.behavior_id
-        WHERE r.qa_override = 0 AND b.status != 'deprecated'
+        WHERE r.qa_override = 0 AND r.status = 'active' AND b.status != 'deprecated'
         ORDER BY r.confidence ASC, r.created_at ASC`,
     )
     .all() as (RuleRow & { behavior_name: string; behavior_criticality: string })[];
@@ -185,7 +193,7 @@ export function findDuplicateRules(
       `SELECT r.*, b.name AS behavior_name
          FROM rules r
          JOIN behaviors b ON b.id = r.behavior_id
-        WHERE b.status != 'deprecated'
+        WHERE r.status = 'active' AND b.status != 'deprecated'
         ORDER BY r.created_at ASC`,
     )
     .all() as (RuleRow & { behavior_name: string })[];
@@ -248,6 +256,27 @@ export function overrideRule(
        WHERE id = @id`,
     )
     .run({ id, rule_text, reason, now });
+  if (res.changes === 0) return null;
+  return getRuleById(db, id);
+}
+
+// Retires a rule (status='superseded') — e.g. a duplicate the keeper replaced
+// with a canonical one. The rule drops out of every read; the reason is kept in
+// override_reason as the audit trail of the last QA action. Returns the updated
+// rule, or null if the id is unknown. Mirrors overrideRule.
+export function retireRule(
+  db: Database,
+  id: string,
+  reason: string,
+  now: string = new Date().toISOString(),
+): Rule | null {
+  const res = db
+    .prepare(
+      `UPDATE rules
+         SET status = 'superseded', override_reason = @reason, updated_at = @now
+       WHERE id = @id`,
+    )
+    .run({ id, reason, now });
   if (res.changes === 0) return null;
   return getRuleById(db, id);
 }

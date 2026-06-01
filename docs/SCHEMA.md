@@ -4,7 +4,10 @@
 > Toda migration → atualizar este arquivo no MESMO commit (pre-commit hook bloqueia se não).
 
 ## Status
-- **Migrations implementadas:** `001 initial_schema` — cria as 6 tabelas + índices. Espelhada TS (`packages/mcp-server/src/db/migrations.ts`) + Python (`packages/ingestion/src/qa_memory/db/migrations.py`).
+- **Migrations implementadas:**
+  - `001 initial_schema` — cria as 6 tabelas + índices.
+  - `002 rules_status` — `ALTER TABLE rules ADD COLUMN status TEXT NOT NULL DEFAULT 'active'` (active|superseded). Aposentadoria de regra (ex.: duplicata) sem delete.
+  - Ambas espelhadas TS (`packages/mcp-server/src/db/migrations.ts`) + Python (`packages/ingestion/src/qa_memory/db/migrations.py`).
 - Runner: tabela de controle `schema_migrations(version PK, name, applied_at)`; aplica pendentes (version > max aplicada) em transação; idempotente.
 - Conexão: FK ON sempre; WAL p/ DB em arquivo. TS `openDb(path)` / Py `connect(path)`. `:memory:` p/ testes.
 
@@ -35,7 +38,8 @@ Regras de negócio associadas a behaviors.
 | source_excerpt | TEXT | |
 | source_id | TEXT | |
 | qa_override | INTEGER NOT NULL DEFAULT 0 | 1=QA definiu, sobrescreve inferência |
-| override_reason | TEXT | |
+| override_reason | TEXT | razão da última ação de QA (override OU aposentadoria) |
+| status | TEXT NOT NULL DEFAULT 'active' | active\|superseded (migration 002). superseded = aposentada, oculta de todas as leituras |
 | created_at / updated_at | TEXT NOT NULL | |
 
 ### areas

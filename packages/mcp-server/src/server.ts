@@ -13,6 +13,7 @@ import {
   listRulesForBehaviors,
   listUnconfirmedRules,
   overrideRule,
+  retireRule,
 } from "./repo/rules.js";
 import { insertIncident, listIncidentsForBehaviors } from "./repo/incidents.js";
 import { type Embedder, PersistentEmbedder } from "./embedder.js";
@@ -475,6 +476,40 @@ export function createServer(
           },
         ],
         structuredContent: { count: clusters.length, clusters },
+      };
+    },
+  );
+
+  server.registerTool(
+    "retire_rule",
+    {
+      title: "Retire a redundant rule",
+      description:
+        "Retire a rule by id (status → superseded) — e.g. the non-canonical member of a duplicate cluster " +
+        "after the user picked which wording to keep. The retired rule drops out of every read (query_risk, " +
+        "review_memory, find_duplicate_rules); the reason is kept as the audit trail. " +
+        "Use AFTER the user has chosen the canonical rule. Irreversible through the tools — confirm before calling.",
+      inputSchema: {
+        rule_id: z.string().describe("Id of the rule to retire (from find_duplicate_rules / review_memory)"),
+        reason: z.string().describe("Why QA is retiring it (audit trail) — e.g. 'duplicate of <canonical>'"),
+      },
+    },
+    (args: { rule_id: string; reason: string }) => {
+      const fail = (msg: string) => ({
+        content: [{ type: "text" as const, text: msg }],
+        structuredContent: { ok: false, reason: msg },
+      });
+      if (!args.reason.trim()) return fail("A `reason` is required to retire a rule (audit trail).");
+      const retired = retireRule(db, args.rule_id, args.reason);
+      if (!retired) return fail(`No rule with id "${args.rule_id}".`);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Retired rule ${retired.id} (status: superseded). It no longer shows in risk, review, or dedup.\n  ${retired.rule_text}`,
+          },
+        ],
+        structuredContent: { ok: true, rule: retired },
       };
     },
   );

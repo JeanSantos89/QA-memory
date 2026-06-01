@@ -45,6 +45,23 @@ def test_enforces_foreign_keys() -> None:
         )
 
 
+def test_rules_status_default_active() -> None:
+    # Migration 002 adds rules.status defaulting to 'active'.
+    conn = connect(":memory:")
+    conn.execute(
+        "INSERT INTO behaviors (id, name, description, criticality, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("b1", "n", "d", "P1", "2026-01-01", "2026-01-01"),
+    )
+    conn.execute(
+        "INSERT INTO rules (id, behavior_id, rule_text, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        ("r1", "b1", "x", "2026-01-01", "2026-01-01"),
+    )
+    row = conn.execute("SELECT status FROM rules WHERE id=?", ("r1",)).fetchone()
+    assert row == ("active",)
+
+
 def test_behavior_defaults() -> None:
     conn = connect(":memory:")
     conn.execute(

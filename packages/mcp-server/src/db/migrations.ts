@@ -83,8 +83,16 @@ CREATE INDEX idx_incidents_behavior ON incidents(behavior_id);
 CREATE INDEX idx_embeddings_entity ON embeddings(entity_type, entity_id);
 `;
 
+// 002: rules gain a lifecycle status (active | superseded). Retirement (e.g. a
+// duplicate the keeper supersedes) is a fact about curation, distinct from
+// confidence (strength of the inference). Reads filter status='active'.
+const RULE_STATUS_SQL = `
+ALTER TABLE rules ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+`;
+
 export const MIGRATIONS: Migration[] = [
   { version: 1, name: "initial_schema", sql: INITIAL_SQL },
+  { version: 2, name: "rules_status", sql: RULE_STATUS_SQL },
 ];
 
 // Applies pending migrations inside a transaction each. Returns count applied.

@@ -575,6 +575,60 @@ describe("find_duplicate_rules tool over MCP (dedup signal)", () => {
   });
 });
 
+describe("retire_rule tool over MCP (supersede, migration 002)", () => {
+  async function clientWithDuplicates() {
+    const db = openDb(":memory:");
+    const bid = insertBehavior(db, { name: "Coupon redemption", description: "d", criticality: "P1" });
+    const id1 = insertRule(db, { behavior_id: bid, rule_text: "One coupon per order" });
+    insertRule(db, { behavior_id: bid, rule_text: "one coupon, per order!" }); // dup
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return { client, id1 };
+  }
+
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("retire_rule");
+  });
+
+  it("retires a rule by id and drops it from dedup", async () => {
+    const { client, id1 } = await clientWithDuplicates();
+    const res = (await client.callTool({
+      name: "retire_rule",
+      arguments: { rule_id: id1, reason: "duplicate of canonical" },
+    })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean; rule: { status: string } } };
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.structuredContent?.rule.status).toBe("superseded");
+
+    const dup = (await client.callTool({
+      name: "find_duplicate_rules",
+      arguments: {},
+    })) as { structuredContent?: { count: number } };
+    expect(dup.structuredContent?.count).toBe(0); // only one active rule left
+  });
+
+  it("refuses an unknown rule id", async () => {
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "retire_rule",
+      arguments: { rule_id: "nope", reason: "x" },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+  });
+
+  it("requires a reason", async () => {
+    const { client, id1 } = await clientWithDuplicates();
+    const res = (await client.callTool({
+      name: "retire_rule",
+      arguments: { rule_id: id1, reason: "  " },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+  });
+});
+
 describe("guided surface (Block B)", () => {
   it("lists the getting_started and assess_change prompts", async () => {
     const client = await connectedClient();

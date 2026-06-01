@@ -48,6 +48,7 @@ function rule(over: Partial<Rule>): Rule {
     source_id: null,
     qa_override: true,
     override_reason: null,
+    status: "active",
     created_at: "",
     updated_at: "",
     ...over,
