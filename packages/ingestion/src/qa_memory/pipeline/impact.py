@@ -102,9 +102,11 @@ def _unpack(blob: bytes) -> list[float]:
 
 
 def _rules_for(conn: sqlite3.Connection, behavior_id: str) -> list[str]:
-    # Hide under_review rules (confidence < 0.5) — same contract as the MCP repo.
+    # Hide under_review rules (confidence < 0.5) and retired ones
+    # (status='superseded') — same contract as the MCP repo (migration 002).
     rows = conn.execute(
-        "SELECT rule_text FROM rules WHERE behavior_id = ? AND confidence >= 0.5",
+        "SELECT rule_text FROM rules "
+        "WHERE behavior_id = ? AND confidence >= 0.5 AND status = 'active'",
         (behavior_id,),
     ).fetchall()
     return [str(r[0]) for r in rows]

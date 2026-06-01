@@ -112,6 +112,17 @@ def test_retrieve_hides_under_review_rules() -> None:
     assert related[0].rules == ["solid rule"]  # confidence 0.3 hidden
 
 
+def test_retrieve_hides_superseded_rules() -> None:
+    # Migration 002: a retired (status='superseded') rule must not feed analysis.
+    conn = _conn()
+    _seed_behavior(conn, "b1", "Cancellation", "Order cancellation flow",
+                   [("kept rule", 0.9), ("dup rule", 0.9)], _vec(0))
+    conn.execute("UPDATE rules SET status='superseded' WHERE rule_text='dup rule'")
+    conn.commit()
+    related = retrieve_related(conn, "cancel", FakeEmbed({"cancel": 0})).related
+    assert related[0].rules == ["kept rule"]
+
+
 def test_analyze_impact_parses_and_logs_tokens() -> None:
     conn = _conn()
     _seed_behavior(conn, "b1", "Cancellation", "Order cancellation flow",

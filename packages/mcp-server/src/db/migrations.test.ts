@@ -52,6 +52,18 @@ describe("migrate", () => {
     ).toThrow(/FOREIGN KEY/);
   });
 
+  it("002 adds rules.status defaulting to 'active'", () => {
+    const db = openDb(":memory:");
+    db.prepare(
+      "INSERT INTO behaviors (id, name, description, criticality, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run("b1", "n", "d", "P1", "2026-01-01", "2026-01-01");
+    db.prepare(
+      "INSERT INTO rules (id, behavior_id, rule_text, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("r1", "b1", "x", "2026-01-01", "2026-01-01");
+    const row = db.prepare("SELECT status FROM rules WHERE id=?").get("r1") as { status: string };
+    expect(row.status).toBe("active");
+  });
+
   it("applies column defaults on behaviors", () => {
     const db = openDb(":memory:");
     db.prepare(

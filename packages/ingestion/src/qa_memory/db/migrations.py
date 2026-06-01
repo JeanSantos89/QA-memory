@@ -92,8 +92,16 @@ CREATE INDEX idx_incidents_behavior ON incidents(behavior_id);
 CREATE INDEX idx_embeddings_entity ON embeddings(entity_type, entity_id);
 """
 
+# 002: rules gain a lifecycle status (active | superseded). Retirement (e.g. a
+# duplicate the keeper supersedes) is a fact about curation, distinct from
+# confidence (strength of the inference). Reads filter status='active'.
+_RULE_STATUS_SQL = """
+ALTER TABLE rules ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+"""
+
 MIGRATIONS: list[Migration] = [
     Migration(version=1, name="initial_schema", sql=_INITIAL_SQL),
+    Migration(version=2, name="rules_status", sql=_RULE_STATUS_SQL),
 ]
 
 

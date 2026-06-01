@@ -8,6 +8,7 @@ import {
   listUnconfirmedRules,
   normalizeRuleText,
   overrideRule,
+  retireRule,
 } from "./rules.js";
 
 function seed() {
@@ -144,6 +145,40 @@ describe("rules repo", () => {
       insertRule(db, { behavior_id: bid, rule_text: "same text here" });
       insertRule(db, { behavior_id: bid, rule_text: "same text here" });
       expect(findDuplicateRules(db)).toEqual([]);
+    });
+  });
+
+  describe("retireRule (supersede, migration 002)", () => {
+    it("new rules default to status 'active'", () => {
+      const { db, bid } = seed();
+      const r = listRulesForBehaviors(db, [bid])[0];
+      expect(r?.status).toBe("active");
+    });
+
+    it("retires a rule: superseded, hidden from every read, reason kept", () => {
+      const { db, bid } = seed();
+      const target = listUnconfirmedRules(db).find((p) => p.rule.rule_text === "Inferred ok")!;
+      const r = retireRule(db, target.rule.id, "duplicate of QA rule");
+      expect(r?.status).toBe("superseded");
+      expect(r?.override_reason).toBe("duplicate of QA rule");
+      // gone from visible rules + the curation queue.
+      expect(listRulesForBehaviors(db, [bid]).map((x) => x.rule_text)).not.toContain("Inferred ok");
+      expect(listUnconfirmedRules(db).map((p) => p.rule.rule_text)).not.toContain("Inferred ok");
+    });
+
+    it("returns null for an unknown id", () => {
+      const { db } = seed();
+      expect(retireRule(db, "nope", "x")).toBeNull();
+    });
+
+    it("a retired duplicate drops out of findDuplicateRules", () => {
+      const db = openDb(":memory:");
+      const bid = insertBehavior(db, { name: "Coupon", description: "d", criticality: "P1" });
+      const id1 = insertRule(db, { behavior_id: bid, rule_text: "One coupon per order" });
+      insertRule(db, { behavior_id: bid, rule_text: "one coupon, per order!" });
+      expect(findDuplicateRules(db)).toHaveLength(1);
+      retireRule(db, id1, "duplicate");
+      expect(findDuplicateRules(db)).toEqual([]); // only one active rule remains
     });
   });
 });
