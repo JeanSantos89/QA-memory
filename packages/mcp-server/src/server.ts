@@ -9,6 +9,7 @@ import {
   getRuleById,
   insertRule,
   listRulesForBehaviors,
+  listUnconfirmedRules,
   overrideRule,
 } from "./repo/rules.js";
 import { insertIncident, listIncidentsForBehaviors } from "./repo/incidents.js";
@@ -328,6 +329,81 @@ export function createServer(
           },
         ],
         structuredContent: { ok: true, incident_id: id, behavior_id: behavior.id },
+      };
+    },
+  );
+
+  server.registerTool(
+    "review_memory",
+    {
+      title: "Review the memory curation queue",
+      description:
+        "List the rules awaiting QA confirmation — inferred rules the system extracted but no human has confirmed yet (qa_override=0). " +
+        "INCLUDES under_review rules (confidence < 0.5) that are hidden from every other read, so they can be rescued or discarded. " +
+        "This is the memory-keeper's worklist: surface candidates, confirm them with the user, then promote each via update_rule (pass its rule_id). " +
+        "Read-only — it changes nothing.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Max rules to return (default 50). Weakest confidence first."),
+      },
+    },
+    (args: { limit?: number }) => {
+      const all = listUnconfirmedRules(db);
+      const pending = all.slice(0, args.limit ?? 50);
+
+      if (pending.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                countBehaviors(db) === 0
+                  ? emptyStateHint()
+                  : "Nothing awaiting confirmation — every rule is QA-confirmed.",
+            },
+          ],
+          structuredContent: { count: 0, total: all.length, pending: [] },
+        };
+      }
+
+      // Group by behavior, preserving the weakest-first order of first appearance.
+      const order: string[] = [];
+      const byBehavior = new Map<string, typeof pending>();
+      for (const p of pending) {
+        const key = p.rule.behavior_id;
+        if (!byBehavior.has(key)) {
+          byBehavior.set(key, []);
+          order.push(key);
+        }
+        byBehavior.get(key)!.push(p);
+      }
+
+      const blocks = order
+        .map((key) => {
+          const group = byBehavior.get(key)!;
+          const head = `${group[0]!.behavior_criticality} ${group[0]!.behavior_name}`;
+          const lines = group
+            .map((p) => {
+              const flag = p.under_review ? ", UNDER REVIEW" : "";
+              return `  - "${p.rule.rule_text}" [conf ${p.rule.confidence.toFixed(2)}${flag}, id ${p.rule.id}]`;
+            })
+            .join("\n");
+          return `${head}\n${lines}`;
+        })
+        .join("\n\n");
+
+      const truncated = all.length > pending.length ? ` (showing ${pending.length})` : "";
+      const header = `${all.length} rule(s) awaiting QA confirmation${truncated}:`;
+      const footer =
+        "To promote: confirm with the user, then call update_rule with the rule_id (pins it QA-confirmed, confidence 1.00).";
+
+      return {
+        content: [{ type: "text" as const, text: `${header}\n\n${blocks}\n\n${footer}` }],
+        structuredContent: { count: pending.length, total: all.length, pending },
       };
     },
   );
