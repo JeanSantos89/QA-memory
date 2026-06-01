@@ -528,6 +528,53 @@ describe("review_memory tool over MCP (curation queue)", () => {
   });
 });
 
+describe("find_duplicate_rules tool over MCP (dedup signal)", () => {
+  async function clientWithDuplicates() {
+    const db = openDb(":memory:");
+    const bid = insertBehavior(db, { name: "Coupon redemption", description: "d", criticality: "P1" });
+    insertRule(db, { behavior_id: bid, rule_text: "One coupon per order" });
+    insertRule(db, { behavior_id: bid, rule_text: "one coupon, per order!" }); // dup after normalize
+    insertRule(db, { behavior_id: bid, rule_text: "Free shipping over 100" }); // unrelated
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  }
+
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("find_duplicate_rules");
+  });
+
+  it("surfaces a duplicate cluster with rule ids", async () => {
+    const client = await clientWithDuplicates();
+    const res = (await client.callTool({
+      name: "find_duplicate_rules",
+      arguments: {},
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: { count: number; clusters: Array<Array<{ rule: { rule_text: string; id: string } }>> };
+    };
+    expect(res.structuredContent?.count).toBe(1);
+    expect(res.structuredContent?.clusters[0]).toHaveLength(2);
+    expect(res.content[0]?.text).toContain("duplicate cluster");
+    expect(res.content[0]?.text).toContain("One coupon per order");
+    expect(res.structuredContent?.clusters[0]?.[0]?.rule.id).toBeTruthy();
+  });
+
+  it("reports a clean memory when nothing duplicates", async () => {
+    const client = await connectedClient(); // single rule
+    const res = (await client.callTool({
+      name: "find_duplicate_rules",
+      arguments: {},
+    })) as { content: Array<{ text: string }>; structuredContent?: { count: number } };
+    expect(res.structuredContent?.count).toBe(0);
+    expect(res.content[0]?.text).toContain("No duplicate rules");
+  });
+});
+
 describe("guided surface (Block B)", () => {
   it("lists the getting_started and assess_change prompts", async () => {
     const client = await connectedClient();

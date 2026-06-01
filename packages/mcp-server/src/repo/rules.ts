@@ -138,6 +138,92 @@ export function listUnconfirmedRules(db: Database): PendingRule[] {
   });
 }
 
+// A rule inside a duplicate cluster, with its behavior name for display.
+export interface DuplicateRule {
+  rule: Rule;
+  behavior_name: string;
+}
+
+// Default token-overlap threshold above which two rules are "near-duplicates".
+export const DEFAULT_DUP_THRESHOLD = 0.7;
+
+// Language-agnostic normalization (PT/EN): lowercase, non-alphanumeric → space,
+// collapse + trim. Unicode-aware so accented chars survive.
+export function normalizeRuleText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function tokenSet(s: string): Set<string> {
+  return new Set(normalizeRuleText(s).split(" ").filter(Boolean));
+}
+
+// Jaccard overlap of two token sets. Two empty sets count as identical.
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+// Finds clusters of duplicate / near-duplicate rules across all non-deprecated
+// behaviors — the memory-keeper's dedup signal. Two rules join a cluster when
+// their normalized text is identical OR their token-overlap (Jaccard) >=
+// threshold. Detection only: it never merges or deletes (the keeper proposes,
+// the user decides). Clusters of size >= 2 only, largest first; INCLUDES
+// under_review and cross-behavior pairs (a duplicate can hide anywhere).
+export function findDuplicateRules(
+  db: Database,
+  threshold: number = DEFAULT_DUP_THRESHOLD,
+): DuplicateRule[][] {
+  const rows = db
+    .prepare(
+      `SELECT r.*, b.name AS behavior_name
+         FROM rules r
+         JOIN behaviors b ON b.id = r.behavior_id
+        WHERE b.status != 'deprecated'
+        ORDER BY r.created_at ASC`,
+    )
+    .all() as (RuleRow & { behavior_name: string })[];
+
+  const items = rows.map((row) => {
+    const { behavior_name, ...ruleRow } = row;
+    return { rule: hydrate(ruleRow), behavior_name, tokens: tokenSet(ruleRow.rule_text) };
+  });
+
+  // Union-find over rule indices.
+  const parent = items.map((_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]!]!;
+      x = parent[x]!;
+    }
+    return x;
+  };
+  const union = (a: number, b: number) => {
+    parent[find(a)] = find(b);
+  };
+
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      if (jaccard(items[i]!.tokens, items[j]!.tokens) >= threshold) union(i, j);
+    }
+  }
+
+  const groups = new Map<number, DuplicateRule[]>();
+  items.forEach((it, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push({ rule: it.rule, behavior_name: it.behavior_name });
+  });
+
+  return [...groups.values()].filter((g) => g.length >= 2).sort((a, b) => b.length - a.length);
+}
+
 export function getRuleById(db: Database, id: string): Rule | null {
   const row = db.prepare("SELECT * FROM rules WHERE id = ?").get(id) as
     | RuleRow
