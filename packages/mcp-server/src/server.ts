@@ -19,6 +19,7 @@ import { insertIncident, listIncidentsForBehaviors } from "./repo/incidents.js";
 import { type Embedder, PersistentEmbedder } from "./embedder.js";
 import { type Ingester, PythonIngester } from "./ingester.js";
 import { type Assessor, PythonAssessor } from "./assessor.js";
+import { feedKnowledge } from "./feed.js";
 import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { getLabels } from "./i18n.js";
@@ -510,6 +511,75 @@ export function createServer(
           },
         ],
         structuredContent: { ok: true, rule: retired },
+      };
+    },
+  );
+
+  const FeedRuleSchema = z.object({
+    rule_text: z.string().describe("The rule, in plain language"),
+    confidence: z.number().min(0).max(1).optional().describe("0..1 (default 0.6 — agent inference)"),
+    source_excerpt: z.string().optional().describe("Verbatim excerpt this rule was drawn from"),
+    qa_override: z.boolean().optional().describe("True = QA-confirmed (default false = inference)"),
+    override_reason: z.string().optional().describe("Reason when qa_override=true"),
+  });
+
+  const FeedBehaviorSchema = z.object({
+    name: z.string().describe("Short behavior name"),
+    description: z.string().describe("What the product does here"),
+    criticality: z.string().describe("P0|P1|P2|P3"),
+    confirmed_by_qa: z.boolean().optional(),
+    qa_note: z.string().optional(),
+    rules: z.array(FeedRuleSchema).optional(),
+  });
+
+  server.registerTool(
+    "feed_to_memory",
+    {
+      title: "Feed structured knowledge (no LLM)",
+      description:
+        "Persist behaviors + rules directly from structured JSON — NO internal LLM call. " +
+        "Use this instead of add_to_memory when YOU (the agent) are the extractor: " +
+        "read the source (Jira task, Confluence page, notes), structure the knowledge yourself, " +
+        "and call this tool. Local embeddings are still generated for semantic search. " +
+        "Much cheaper than add_to_memory (zero extraction tokens).",
+      inputSchema: {
+        behaviors: z
+          .array(FeedBehaviorSchema)
+          .min(1)
+          .describe("Behaviors + rules extracted from the source"),
+        source: z
+          .object({
+            type: z.string().optional().describe("jira|confluence|google_doc|conversation|file"),
+            label: z.string().optional().describe("Short human label, e.g. 'PROJ-123 — checkout'"),
+            source_ref: z.string().optional().describe("Ticket key, URL, or path"),
+          })
+          .optional()
+          .describe("Provenance of this knowledge (for curation trail)"),
+      },
+    },
+    async (args: {
+      behaviors: Array<{
+        name: string;
+        description: string;
+        criticality: string;
+        confirmed_by_qa?: boolean;
+        qa_note?: string;
+        rules?: Array<{
+          rule_text: string;
+          confidence?: number;
+          source_excerpt?: string;
+          qa_override?: boolean;
+          override_reason?: string;
+        }>;
+      }>;
+      source?: { type?: string; label?: string; source_ref?: string };
+    }) => {
+      const r = await feedKnowledge(db, args, embedder);
+      const tail = r.embedder_available ? "" : " (embedder unavailable — LIKE-only search)";
+      const text = `Fed ${r.behaviors} behavior(s), ${r.rules} rule(s), ${r.embeddings} embedding(s)${tail}.`;
+      return {
+        content: [{ type: "text" as const, text }],
+        structuredContent: { ok: true, ...r },
       };
     },
   );
