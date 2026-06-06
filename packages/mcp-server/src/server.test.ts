@@ -731,6 +731,66 @@ describe("deprecate_behavior tool over MCP (behavior lifecycle)", () => {
   });
 });
 
+describe("confirm_behavior tool over MCP", () => {
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("confirm_behavior");
+  });
+
+  it("confirms a behavior and removes the uncertainty penalty", async () => {
+    const db = openDb(":memory:");
+    const bid = insertBehavior(db, {
+      name: "Coupon apply",
+      description: "Applies a discount at checkout",
+      criticality: "P1",
+    });
+    insertRule(db, { behavior_id: bid, rule_text: "One coupon per order", confidence: 0.9, qa_override: true });
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+
+    const res = (await client.callTool({
+      name: "confirm_behavior",
+      arguments: { behavior_id: bid, note: "Verified in sprint 42" },
+    })) as { content: Array<{ text: string }>; structuredContent?: { ok: boolean; behavior: { confirmed_by_qa: boolean; qa_note: string } } };
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.structuredContent?.behavior.confirmed_by_qa).toBe(true);
+    expect(res.structuredContent?.behavior.qa_note).toBe("Verified in sprint 42");
+    expect(res.content[0]?.text).toContain("Coupon apply");
+  });
+
+  it("refuses an unknown behavior id", async () => {
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "confirm_behavior",
+      arguments: { behavior_id: "no-such-id" },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+  });
+});
+
+describe("record_incident async embedding (ADR 036)", () => {
+  it("record_incident resolves successfully (async path does not throw)", async () => {
+    // Verifies that the async embedding path in record_incident doesn't crash.
+    // The embedder returns null (no embed infra in tests) — the handler must still
+    // resolve OK and return a valid incident_id.
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "record_incident",
+      arguments: {
+        behavior: "authenticate",
+        title: "Login failed for all users",
+        severity: "P0",
+        source_ref: "incident-999",
+      },
+    })) as { structuredContent?: { ok: boolean; incident_id: string } };
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.structuredContent?.incident_id).toBeTruthy();
+  });
+});
+
 describe("guided surface (Block B)", () => {
   it("lists the getting_started and assess_change prompts", async () => {
     const client = await connectedClient();

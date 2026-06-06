@@ -50,8 +50,8 @@ export interface FeedReport {
 }
 
 // float32 little-endian BLOB — mirrors Python `array('f').tobytes()` /
-// unpackVector in embeddings.ts.
-function packVector(v: number[]): Buffer {
+// unpackVector in embeddings.ts. Exported so server.ts can store incident embeddings.
+export function packVector(v: number[]): Buffer {
   const f = new Float32Array(v);
   return Buffer.from(f.buffer.slice(f.byteOffset, f.byteOffset + f.byteLength));
 }

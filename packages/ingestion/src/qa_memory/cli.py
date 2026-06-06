@@ -351,6 +351,33 @@ def feed() -> None:
 
 
 @app.command()
+def translate(
+    text: Annotated[
+        str, typer.Argument(help="Text to translate PT<->EN; pass '-' to read from stdin")
+    ],
+) -> None:
+    """Translate text between PT and EN for cross-language search.
+
+    Detects the source language, translates to the other (PT<->EN), and prints
+    JSON to stdout: {"translation": str|null, "note": str|null}.
+    Used by the MCP server when query_risk/query_behavior return 0 results to
+    try the query in the other language (same fix as ADR 027 for analyze_impact).
+    Requires QA_MEMORY_LLM env var (same as assess). stdout = JSON only.
+    """
+    import sys
+
+    from qa_memory.pipeline.crosslang import translate_query
+
+    raw = sys.stdin.read() if text == "-" else text
+    if not raw.strip():
+        typer.secho("empty text", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    translation, note = translate_query(raw.strip(), make_llm_client())
+    typer.echo(json.dumps({"translation": translation, "note": note}))
+
+
+@app.command()
 def status() -> None:
     """Show DB path + row counts."""
     db_path = resolve_db_path()

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../db/index.js";
 import {
+  confirmBehavior,
   countBehaviors,
   deprecateBehavior,
   findDuplicateBehaviors,
@@ -140,5 +141,35 @@ describe("deprecateBehavior", () => {
   it("returns null for unknown id", () => {
     const db = openDb(":memory:");
     expect(deprecateBehavior(db, "no-such-id", "reason")).toBeNull();
+  });
+});
+
+describe("confirmBehavior", () => {
+  it("sets confirmed_by_qa=true and records optional note", () => {
+    const db = openDb(":memory:");
+    const id = insertBehavior(db, { name: "Login auth", description: "User signs in", criticality: "P0" });
+    const result = confirmBehavior(db, id, "Verified by Jean");
+    expect(result).not.toBeNull();
+    expect(result!.confirmed_by_qa).toBe(true);
+    expect(result!.qa_note).toBe("Verified by Jean");
+  });
+
+  it("sets confirmed_by_qa=true with null note when note omitted", () => {
+    const db = openDb(":memory:");
+    const id = insertBehavior(db, { name: "Checkout", description: "User pays", criticality: "P1" });
+    const result = confirmBehavior(db, id);
+    expect(result!.confirmed_by_qa).toBe(true);
+    expect(result!.qa_note).toBeNull();
+  });
+
+  it("returns null for unknown id", () => {
+    const db = openDb(":memory:");
+    expect(confirmBehavior(db, "no-such-id")).toBeNull();
+  });
+
+  it("returns null for deprecated behavior", () => {
+    const db = openDb(":memory:");
+    const id = insertBehavior(db, { name: "Old flow", description: "Legacy", criticality: "P2", status: "deprecated" });
+    expect(confirmBehavior(db, id)).toBeNull();
   });
 });

@@ -74,7 +74,8 @@ def test_behavior_links_source_and_embedding_stored_as_blob() -> None:
 
     beh_id = conn.execute("SELECT id FROM behaviors").fetchone()[0]
     et, eid, vec, model = conn.execute(
-        "SELECT entity_type, entity_id, vector, model FROM embeddings WHERE entity_type = 'behavior'"
+        "SELECT entity_type, entity_id, vector, model"
+        " FROM embeddings WHERE entity_type = 'behavior'"
     ).fetchone()
     assert et == "behavior"
     assert eid == beh_id
