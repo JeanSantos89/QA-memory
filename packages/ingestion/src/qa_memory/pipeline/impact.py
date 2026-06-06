@@ -16,6 +16,8 @@ Every LLM call logs tokens (CLAUDE.md). Prompt is caveman-terse.
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from array import array
 from dataclasses import dataclass, field
@@ -99,6 +101,57 @@ def _unpack(blob: bytes) -> list[float]:
     arr = array("f")
     arr.frombytes(blob)
     return [float(x) for x in arr]
+
+
+def _glob_to_re(pattern: str) -> re.Pattern[str]:
+    """Compile a file glob to an anchored regex. Mirrors globToRegExp in areas.ts."""
+    parts: list[str] = []
+    i = 0
+    p = pattern.replace("\\", "/")
+    while i < len(p):
+        c = p[i]
+        if c == "*":
+            if i + 1 < len(p) and p[i + 1] == "*":
+                parts.append(".*")
+                i += 2
+                if i < len(p) and p[i] == "/":
+                    i += 1
+            else:
+                parts.append("[^/]*")
+                i += 1
+        elif c == "?":
+            parts.append("[^/]")
+            i += 1
+        else:
+            parts.append(re.escape(c))
+            i += 1
+    return re.compile("^" + "".join(parts) + "$", re.IGNORECASE)
+
+
+def _matches_glob(file_path: str, pattern: str) -> bool:
+    return bool(_glob_to_re(pattern).match(file_path.replace("\\", "/")))
+
+
+def _looksLikePath(text: str) -> bool:
+    """Heuristic: does this look like a file path rather than free text?
+    Mirrors looksLikePath in server.ts."""
+    return bool(re.search(r"[/\\]|\.[a-z0-9]+$", text.strip(), re.IGNORECASE))
+
+
+def _behaviors_for_path(conn: sqlite3.Connection, path: str) -> list[str]:
+    """Return behavior_ids whose area glob matches `path`. Mirrors behaviorIdsForPath
+    in areas.ts — allows analyze_impact to resolve paths the same way query_risk does."""
+    areas = conn.execute("SELECT file_pattern, behavior_ids FROM areas").fetchall()
+    ids: list[str] = []
+    seen: set[str] = set()
+    for pattern, behavior_ids_json in areas:
+        if _matches_glob(path, str(pattern)):
+            for bid in json.loads(str(behavior_ids_json)):
+                sid = str(bid)
+                if sid not in seen:
+                    seen.add(sid)
+                    ids.append(sid)
+    return ids
 
 
 def _rules_for(conn: sqlite3.Connection, behavior_id: str) -> list[str]:
@@ -189,6 +242,20 @@ def retrieve_related(
     ordered_ids: list[str] = []
     meta: dict[str, tuple[str, str]] = {}
 
+    # Path resolution: if the change looks like a file path, prepend behaviors
+    # mapped to that path via area globs (same as query_risk does in server.ts).
+    # This lets "analyze_impact checkout/pay.ts" find relevant behaviors even when
+    # the path string has no semantic similarity to behavior descriptions.
+    if _looksLikePath(q):
+        for bid in _behaviors_for_path(conn, q):
+            row = conn.execute(
+                "SELECT name, description FROM behaviors WHERE id = ? AND status != 'deprecated'",
+                (bid,),
+            ).fetchone()
+            if row and bid not in meta:
+                ordered_ids.append(bid)
+                meta[bid] = (str(row[0]), str(row[1]))
+
     # Original-language pass.
     if precomputed_vector is not None:
         orig_vec = precomputed_vector
@@ -209,6 +276,34 @@ def retrieve_related(
             _collect_candidates(conn, translation, trans_vec, ordered_ids, meta, limit)
         else:
             note = degrade_note
+
+    # Incident-semantic pass: surface behaviors whose INCIDENT titles/descriptions
+    # semantically match the query, even when the behavior description itself
+    # doesn't. Fixes the gap where analyze_impact is blind to incident history
+    # when the behavior text doesn't overlap with the change query (Issue 6).
+    if orig_vec and len(orig_vec) == EMBEDDING_DIM and len(ordered_ids) < limit:
+        inc_rows = conn.execute(
+            """SELECT e.entity_id, e.vector, i.behavior_id
+                 FROM embeddings e
+                 JOIN incidents i ON i.id = e.entity_id
+                WHERE e.entity_type = 'incident'"""
+        ).fetchall()
+        inc_scored: list[tuple[float, str]] = []
+        for _inc_id, blob, behavior_id in inc_rows:
+            score = _cosine(orig_vec, _unpack(blob))
+            if score >= SEMANTIC_FLOOR:
+                inc_scored.append((score, str(behavior_id)))
+        inc_scored.sort(key=lambda t: t[0], reverse=True)
+        for _s, bid in inc_scored:
+            if bid not in meta and len(ordered_ids) < limit:
+                sql = (
+                    "SELECT name, description FROM behaviors"
+                    " WHERE id = ? AND status != 'deprecated'"
+                )
+                row = conn.execute(sql, (bid,)).fetchone()
+                if row:
+                    ordered_ids.append(bid)
+                    meta[bid] = (str(row[0]), str(row[1]))
 
     out: list[_RelatedBehavior] = []
     for bid in ordered_ids[:limit]:

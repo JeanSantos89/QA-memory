@@ -73,7 +73,11 @@ def test_token_usage_accumulates() -> None:
 def test_token_usage_accumulates_multi_chunk() -> None:
     # Multi-chunk: Pass 1 + Pass 2 both accumulate.
     chunks = [Chunk(0, "a"), Chunk(1, "b")]
-    client = FakeClient([_summary(relevant=True, io=(10, 5)), _summary(relevant=False, io=(10, 5)), _extract([], io=(20, 30))])
+    client = FakeClient([
+        _summary(relevant=True, io=(10, 5)),
+        _summary(relevant=False, io=(10, 5)),
+        _extract([], io=(20, 30)),
+    ])
     result = TwoPassExtractor(client).extract(chunks)
     assert result.usage.input_tokens == 40
     assert result.usage.output_tokens == 40

@@ -11,6 +11,7 @@ import {
 } from "./repo/behaviors.js";
 import { listRuleEmbeddings } from "./repo/rules.js";
 import type { Embedder } from "./embedder.js";
+import type { Translator } from "./translator.js";
 import { cosineSimilarity, unpackVector } from "./embeddings.js";
 
 // Below this cosine score a behavior is treated as unrelated (avoids dumping
@@ -22,11 +23,25 @@ const SEMANTIC_FLOOR = 0.25;
 // not already surfaced, capped at `limit`. Falls back to pure LIKE when there
 // are no embeddings or the embedder is unavailable — so seeded/un-ingested DBs
 // still work exactly as before.
+// Cross-language fallback: when the original query returns 0 results, we try
+// the translated query (PT→EN or EN→PT). Only called when translator is provided
+// AND the first pass returned nothing — so happy-path queries pay zero latency.
+// Defined here (not inside searchBehaviors) to avoid a recursive default-arg loop.
+async function searchWithTranslation(
+  db: Database,
+  embedder: Embedder,
+  translation: string,
+  limit: number,
+): Promise<Behavior[]> {
+  return searchBehaviors(db, embedder, translation, limit);
+}
+
 export async function searchBehaviors(
   db: Database,
   embedder: Embedder,
   query: string,
   limit = 10,
+  translator?: Translator,
 ): Promise<Behavior[]> {
   const q = query.trim();
   if (!q) return listBehaviors(db).slice(0, limit);
@@ -89,6 +104,17 @@ export async function searchBehaviors(
           }
         }
       }
+    }
+  }
+
+  // Cross-language fallback: when the whole result set is empty and we have a
+  // translator, try the translated query. A PT query against an EN-stored DB
+  // (or vice-versa) can return nothing because all-MiniLM is EN-centric AND LIKE
+  // never crosses languages — same root cause as ADR 027, now fixed here too.
+  if (out.length === 0 && translator) {
+    const { translation } = translator.translate(q);
+    if (translation && translation.toLowerCase() !== q.toLowerCase()) {
+      return searchWithTranslation(db, embedder, translation, limit);
     }
   }
 

@@ -240,6 +240,28 @@ export function deprecateBehavior(
   return row ? hydrate(row) : null;
 }
 
+// Marks a behavior as QA-confirmed (confirmed_by_qa=true). Confirmed behaviors
+// stop inflating the risk uncertainty score (the "unconfirmed behavior" penalty
+// in risk.ts). Returns the updated behavior, or null if not found / deprecated.
+export function confirmBehavior(
+  db: Database,
+  id: string,
+  note?: string | null,
+  now: string = new Date().toISOString(),
+): Behavior | null {
+  const res = db
+    .prepare(
+      `UPDATE behaviors SET confirmed_by_qa = 1, qa_note = @note, updated_at = @now
+       WHERE id = @id AND status != 'deprecated'`,
+    )
+    .run({ id, note: note ?? null, now });
+  if (res.changes === 0) return null;
+  const row = db.prepare("SELECT * FROM behaviors WHERE id = ?").get(id) as
+    | BehaviorRow
+    | undefined;
+  return row ? hydrate(row) : null;
+}
+
 // Case-insensitive LIKE over name + description (lexical fallback).
 // Empty query → returns all (non-deprecated). Semantic ranking lives in search.ts.
 export function queryBehavior(

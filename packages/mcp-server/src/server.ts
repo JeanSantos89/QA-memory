@@ -1,9 +1,11 @@
 // MCP server wiring. Registers the query_behavior tool over the behaviors repo.
+import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   behaviorsByIds,
+  confirmBehavior,
   countBehaviors,
   DEFAULT_BEHAVIOR_DUP_THRESHOLD,
   deprecateBehavior,
@@ -26,7 +28,8 @@ import { insertIncident, listIncidentsForBehaviors } from "./repo/incidents.js";
 import { type Embedder, PersistentEmbedder } from "./embedder.js";
 import { type Ingester, PythonIngester } from "./ingester.js";
 import { type Assessor, PythonAssessor } from "./assessor.js";
-import { feedKnowledge } from "./feed.js";
+import { type Translator, PythonTranslator } from "./translator.js";
+import { feedKnowledge, packVector } from "./feed.js";
 import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { getLabels } from "./i18n.js";
@@ -46,6 +49,7 @@ export function createServer(
   embedder: Embedder = new PersistentEmbedder(),
   ingester: Ingester = new PythonIngester(),
   assessor: Assessor = new PythonAssessor(),
+  translator: Translator = new PythonTranslator(),
 ): McpServer {
   const server = new McpServer({ name: "qa-memory", version: VERSION });
   const L = getLabels(); // presentation labels, chosen by QA_MEMORY_LANG
@@ -59,7 +63,7 @@ export function createServer(
       inputSchema: { query: z.string().describe("Free-text search over behavior name + description") },
     },
     async (args: { query: string }) => {
-      const results = await searchBehaviors(db, embedder, args.query);
+      const results = await searchBehaviors(db, embedder, args.query, 10, translator);
       const text =
         results.length === 0
           ? countBehaviors(db) === 0
@@ -93,7 +97,7 @@ export function createServer(
         : [];
       let resolvedVia: "area" | "search" = "area";
       if (behaviors.length === 0) {
-        behaviors = await searchBehaviors(db, embedder, args.query);
+        behaviors = await searchBehaviors(db, embedder, args.query, 10, translator);
         resolvedVia = "search";
       }
       const behaviorIds = behaviors.map((b) => b.id);
@@ -296,7 +300,7 @@ export function createServer(
         occurred_at: z.string().optional().describe("ISO date the incident occurred (defaults to now)"),
       },
     },
-    (args: {
+    async (args: {
       behavior: string;
       title: string;
       severity?: string;
@@ -332,6 +336,20 @@ export function createServer(
         source_ref: args.source_ref ?? null,
         occurred_at: args.occurred_at ?? null,
       });
+
+      // Embed the incident so analyze_impact can find behaviors via incident
+      // semantic similarity (the "blind to incident history" gap, Issue 6). The
+      // warm embedder makes this ~10ms. Failure is silent — risk score still works.
+      const incidentText = args.title + (args.description ? " " + args.description : "");
+      const incVec = await embedder.embed(incidentText);
+      if (incVec) {
+        const now = new Date().toISOString();
+        db.prepare(
+          `INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
+           VALUES (?, 'incident', ?, ?, ?, 'all-MiniLM-L6-v2', ?)`,
+        ).run(randomUUID(), id, incidentText, packVector(incVec), now);
+      }
+
       return {
         content: [
           {
@@ -340,6 +358,43 @@ export function createServer(
           },
         ],
         structuredContent: { ok: true, incident_id: id, behavior_id: behavior.id },
+      };
+    },
+  );
+
+  server.registerTool(
+    "confirm_behavior",
+    {
+      title: "Confirm a behavior as QA-authoritative",
+      description:
+        "Mark a behavior as QA-confirmed (confirmed_by_qa = true). " +
+        "Unconfirmed behaviors add an uncertainty penalty to the risk score — confirming them " +
+        "removes that penalty and signals the knowledge is trusted. " +
+        "Requires the behavior id (from query_behavior / find_duplicate_behaviors). " +
+        "Optional note to record why it was confirmed.",
+      inputSchema: {
+        behavior_id: z.string().describe("Id of the behavior to confirm"),
+        note: z.string().optional().describe("Optional QA note about this confirmation"),
+      },
+    },
+    (args: { behavior_id: string; note?: string }) => {
+      const fail = (msg: string) => ({
+        content: [{ type: "text" as const, text: msg }],
+        structuredContent: { ok: false, reason: msg },
+      });
+      const confirmed = confirmBehavior(db, args.behavior_id, args.note ?? null);
+      if (!confirmed)
+        return fail(
+          `No active behavior with id "${args.behavior_id}" (unknown or already deprecated).`,
+        );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Confirmed behavior "${confirmed.name}" (${confirmed.id}) ✓. Risk score uncertainty penalty removed.`,
+          },
+        ],
+        structuredContent: { ok: true, behavior: confirmed },
       };
     },
   );

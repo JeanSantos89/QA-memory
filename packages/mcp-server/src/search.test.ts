@@ -3,6 +3,7 @@ import { openDb } from "./db/index.js";
 import { insertBehavior } from "./repo/behaviors.js";
 import { insertRule } from "./repo/rules.js";
 import type { Embedder } from "./embedder.js";
+import type { Translator } from "./translator.js";
 import { searchBehaviors } from "./search.js";
 
 function pack(vec: number[]): Buffer {
@@ -91,5 +92,45 @@ describe("searchBehaviors — rule-level semantic hits", () => {
 
     const results = await searchBehaviors(db, fixed([1, 0, 0]), "zzz");
     expect(results[0]?.name).toBe("Auth");
+  });
+});
+
+describe("searchBehaviors — cross-language translator fallback", () => {
+  function fakeTranslator(translation: string | null): Translator {
+    return { translate: () => ({ translation, note: null }) };
+  }
+
+  it("retries with translated query when original returns 0 results", async () => {
+    const db = openDb(":memory:");
+    // DB has EN behavior; query is PT
+    seedWithVector(db, "Order cancellation", [1, 0, 0]);
+    // PT query → no LIKE match, vector for "cancelamento" points same way
+    // Fake translator converts "cancelamento" → "cancellation"
+    const embedder: Embedder = {
+      embed: (text) =>
+        // EN query → [1,0,0]; PT query → [0,0,1] (no cosine match)
+        Promise.resolve(text === "cancellation" ? [1, 0, 0] : [0, 0, 1]),
+    };
+    const results = await searchBehaviors(db, embedder, "cancelamento", 10, fakeTranslator("cancellation"));
+    expect(results.map((b) => b.name)).toContain("Order cancellation");
+  });
+
+  it("does not retry when original query already returns results", async () => {
+    const db = openDb(":memory:");
+    seedWithVector(db, "Checkout", [1, 0, 0]);
+    let translated = false;
+    const translator: Translator = {
+      translate: () => { translated = true; return { translation: "checkout", note: null }; },
+    };
+    await searchBehaviors(db, fixed([1, 0, 0]), "checkout", 10, translator);
+    expect(translated).toBe(false);
+  });
+
+  it("does not retry when translator returns null translation", async () => {
+    const db = openDb(":memory:");
+    insertBehavior(db, { name: "Login", description: "login flow", criticality: "P1" });
+    // no embeddings → LIKE path; query "xyz" returns nothing
+    const results = await searchBehaviors(db, fixed([1, 0, 0]), "xyz", 10, fakeTranslator(null));
+    expect(results).toHaveLength(0);
   });
 });
