@@ -629,6 +629,108 @@ describe("retire_rule tool over MCP (supersede, migration 002)", () => {
   });
 });
 
+describe("find_duplicate_behaviors tool over MCP (behavior dedup)", () => {
+  async function clientWithDupBehaviors() {
+    const db = openDb(":memory:");
+    insertBehavior(db, { name: "Login auth", description: "User authenticates with email and password", criticality: "P1" });
+    insertBehavior(db, { name: "Login auth", description: "User authenticates with email and password", criticality: "P1" });
+    insertBehavior(db, { name: "Checkout payment", description: "User pays at checkout with credit card", criticality: "P0" });
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return client;
+  }
+
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("find_duplicate_behaviors");
+  });
+
+  it("surfaces a duplicate cluster with behavior ids", async () => {
+    const client = await clientWithDupBehaviors();
+    const res = (await client.callTool({
+      name: "find_duplicate_behaviors",
+      arguments: {},
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: { count: number; clusters: Array<Array<{ behavior: { name: string; id: string } }>> };
+    };
+    expect(res.structuredContent?.count).toBe(1);
+    expect(res.structuredContent?.clusters[0]).toHaveLength(2);
+    expect(res.content[0]?.text).toContain("duplicate behavior");
+    expect(res.content[0]?.text).toContain("Login auth");
+    expect(res.structuredContent?.clusters[0]?.[0]?.behavior.id).toBeTruthy();
+  });
+
+  it("reports clean memory when no behavior duplicates exist", async () => {
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "find_duplicate_behaviors",
+      arguments: {},
+    })) as { content: Array<{ text: string }>; structuredContent?: { count: number } };
+    expect(res.structuredContent?.count).toBe(0);
+    expect(res.content[0]?.text).toContain("No duplicate behaviors");
+  });
+});
+
+describe("deprecate_behavior tool over MCP (behavior lifecycle)", () => {
+  async function clientWithDupBehaviors() {
+    const db = openDb(":memory:");
+    const id1 = insertBehavior(db, { name: "Login old", description: "Legacy login flow using username", criticality: "P2" });
+    insertBehavior(db, { name: "Login auth", description: "Modern login with email and MFA", criticality: "P1" });
+    const server = createServer(db, noEmbed, spyIngester({ ok: true, message: "ok" }), spyAssessor(okAnalysis));
+    const [ct, st] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0.0.0" });
+    await Promise.all([server.connect(st), client.connect(ct)]);
+    return { client, id1 };
+  }
+
+  it("is listed", async () => {
+    const client = await connectedClient();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).toContain("deprecate_behavior");
+  });
+
+  it("deprecates behavior by id and removes it from query results", async () => {
+    const { client, id1 } = await clientWithDupBehaviors();
+    const res = (await client.callTool({
+      name: "deprecate_behavior",
+      arguments: { behavior_id: id1, reason: "duplicate of Login auth" },
+    })) as {
+      content: Array<{ text: string }>;
+      structuredContent?: { ok: boolean; behavior: { status: string; name: string } };
+    };
+    expect(res.structuredContent?.ok).toBe(true);
+    expect(res.structuredContent?.behavior.status).toBe("deprecated");
+
+    const qb = (await client.callTool({
+      name: "query_behavior",
+      arguments: { query: "Login old" },
+    })) as { structuredContent?: { count: number } };
+    expect(qb.structuredContent?.count).toBe(0);
+  });
+
+  it("refuses unknown behavior id", async () => {
+    const client = await connectedClient();
+    const res = (await client.callTool({
+      name: "deprecate_behavior",
+      arguments: { behavior_id: "no-such", reason: "reason" },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+  });
+
+  it("requires a reason", async () => {
+    const { client, id1 } = await clientWithDupBehaviors();
+    const res = (await client.callTool({
+      name: "deprecate_behavior",
+      arguments: { behavior_id: id1, reason: "  " },
+    })) as { structuredContent?: { ok: boolean } };
+    expect(res.structuredContent?.ok).toBe(false);
+  });
+});
+
 describe("guided surface (Block B)", () => {
   it("lists the getting_started and assess_change prompts", async () => {
     const client = await connectedClient();

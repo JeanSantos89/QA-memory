@@ -2,7 +2,14 @@
 import type { Database } from "better-sqlite3";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { behaviorsByIds, countBehaviors, queryBehavior } from "./repo/behaviors.js";
+import {
+  behaviorsByIds,
+  countBehaviors,
+  DEFAULT_BEHAVIOR_DUP_THRESHOLD,
+  deprecateBehavior,
+  findDuplicateBehaviors,
+  queryBehavior,
+} from "./repo/behaviors.js";
 import { behaviorIdsForPath, insertArea } from "./repo/areas.js";
 import { emptyStateHint, registerPrompts } from "./prompts.js";
 import {
@@ -713,6 +720,112 @@ export function createServer(
           tokens: r.tokens,
           note: r.note ?? null,
         },
+      };
+    },
+  );
+
+  server.registerTool(
+    "find_duplicate_behaviors",
+    {
+      title: "Find duplicate / near-duplicate behaviors",
+      description:
+        "Detect clusters of behaviors that describe the same product area — the memory-keeper's dedup signal for behaviors. " +
+        "Two behaviors cluster when their normalized (name + description) text is identical or their token-overlap crosses the threshold. " +
+        "Detection only — it NEVER deprecates. Surface the clusters, then let the user decide which to keep " +
+        "(deprecate the others via deprecate_behavior). Read-only.",
+      inputSchema: {
+        threshold: z
+          .number()
+          .min(0)
+          .max(1)
+          .optional()
+          .describe(
+            `Token-overlap cutoff 0..1 to treat two behaviors as duplicates (default ${DEFAULT_BEHAVIOR_DUP_THRESHOLD}).`,
+          ),
+      },
+    },
+    (args: { threshold?: number }) => {
+      const clusters = findDuplicateBehaviors(db, args.threshold ?? DEFAULT_BEHAVIOR_DUP_THRESHOLD);
+
+      if (clusters.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                countBehaviors(db) === 0
+                  ? emptyStateHint()
+                  : "No duplicate behaviors found — memory looks deduplicated.",
+            },
+          ],
+          structuredContent: { count: 0, clusters: [] },
+        };
+      }
+
+      const blocks = clusters
+        .map((group, i) => {
+          const lines = group
+            .map(
+              (d) =>
+                `  - "${d.behavior.name}" [${d.behavior.criticality}${d.behavior.confirmed_by_qa ? ", QA✓" : ""}, id ${d.behavior.id}]\n    ${d.behavior.description}`,
+            )
+            .join("\n");
+          return `Cluster ${i + 1} (${group.length} behaviors):\n${lines}`;
+        })
+        .join("\n\n");
+
+      const footer =
+        "Each cluster is a likely duplicate. Decide with the user which behavior to keep, " +
+        "then call deprecate_behavior on the others (they drop out of all reads).";
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `${clusters.length} duplicate behavior cluster(s):\n\n${blocks}\n\n${footer}`,
+          },
+        ],
+        structuredContent: { count: clusters.length, clusters },
+      };
+    },
+  );
+
+  server.registerTool(
+    "deprecate_behavior",
+    {
+      title: "Deprecate a redundant behavior",
+      description:
+        "Deprecate a behavior by id (status → deprecated) — e.g. the non-canonical member of a duplicate cluster " +
+        "after the user picked which behavior to keep. Deprecated behaviors drop out of every read " +
+        "(query_behavior, query_risk, embeddings, dedup scans). " +
+        "Use AFTER the user has chosen the canonical behavior. Irreversible through the tools — confirm before calling.",
+      inputSchema: {
+        behavior_id: z
+          .string()
+          .describe("Id of the behavior to deprecate (from find_duplicate_behaviors)"),
+        reason: z
+          .string()
+          .describe("Why QA is deprecating it (audit trail) — e.g. 'duplicate of <canonical id>'"),
+      },
+    },
+    (args: { behavior_id: string; reason: string }) => {
+      const fail = (msg: string) => ({
+        content: [{ type: "text" as const, text: msg }],
+        structuredContent: { ok: false, reason: msg },
+      });
+      if (!args.reason.trim())
+        return fail("A `reason` is required to deprecate a behavior (audit trail).");
+      const deprecated = deprecateBehavior(db, args.behavior_id, args.reason);
+      if (!deprecated)
+        return fail(`No behavior with id "${args.behavior_id}".`);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Deprecated behavior "${deprecated.name}" (${deprecated.id}). It no longer shows in risk, search, or dedup.\n  Reason: ${args.reason}`,
+          },
+        ],
+        structuredContent: { ok: true, behavior: deprecated },
       };
     },
   );
