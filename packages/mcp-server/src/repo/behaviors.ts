@@ -137,6 +137,109 @@ export function behaviorsByIds(db: Database, ids: string[]): Behavior[] {
   return ids.map((id) => byId.get(id)).filter((b): b is Behavior => b !== undefined);
 }
 
+// A behavior inside a duplicate cluster, with peer count for display.
+export interface DuplicateBehavior {
+  behavior: Behavior;
+}
+
+// Default token-overlap threshold for behavior dedup. Slightly lower than
+// rules (0.7) because behavior descriptions are longer and more varied.
+export const DEFAULT_BEHAVIOR_DUP_THRESHOLD = 0.6;
+
+// Language-agnostic normalization for behavior text (PT/EN): lowercase,
+// non-alphanumeric → space, collapse + trim. Mirrors normalizeRuleText in rules.ts.
+export function normalizeBehaviorText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function behaviorTokenSet(s: string): Set<string> {
+  return new Set(normalizeBehaviorText(s).split(" ").filter(Boolean));
+}
+
+function behaviorJaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 1;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  const union = a.size + b.size - inter;
+  return union === 0 ? 0 : inter / union;
+}
+
+// Finds clusters of duplicate / near-duplicate behaviors across the DB.
+// Two behaviors join a cluster when their normalized (name + description)
+// text is identical OR their token-overlap (Jaccard) >= threshold.
+// Detection only — never merges or deprecates (the keeper proposes,
+// the user decides via deprecate_behavior). Clusters >= 2 only, largest first.
+// Includes all non-deprecated behaviors (under_review is a behavior status
+// in this schema, separate from rules' confidence gate).
+export function findDuplicateBehaviors(
+  db: Database,
+  threshold: number = DEFAULT_BEHAVIOR_DUP_THRESHOLD,
+): DuplicateBehavior[][] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM behaviors WHERE status != 'deprecated' ORDER BY created_at ASC`,
+    )
+    .all() as BehaviorRow[];
+
+  const items = rows.map((row) => {
+    const combined = `${row.name} ${row.description}`;
+    return { behavior: hydrate(row), tokens: behaviorTokenSet(combined) };
+  });
+
+  const parent = items.map((_, i) => i);
+  const find = (x: number): number => {
+    while (parent[x] !== x) {
+      parent[x] = parent[parent[x]!]!;
+      x = parent[x]!;
+    }
+    return x;
+  };
+  const union = (a: number, b: number) => {
+    parent[find(a)] = find(b);
+  };
+
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      if (behaviorJaccard(items[i]!.tokens, items[j]!.tokens) >= threshold) union(i, j);
+    }
+  }
+
+  const groups = new Map<number, DuplicateBehavior[]>();
+  items.forEach((it, i) => {
+    const root = find(i);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push({ behavior: it.behavior });
+  });
+
+  return [...groups.values()].filter((g) => g.length >= 2).sort((a, b) => b.length - a.length);
+}
+
+// Deprecates a behavior (status='deprecated') — e.g. the non-canonical member
+// of a duplicate cluster after the user picked which one to keep. Deprecated
+// behaviors drop out of every read (query_risk, query_behavior, embeddings).
+// Returns the updated behavior, or null if the id is unknown.
+export function deprecateBehavior(
+  db: Database,
+  id: string,
+  reason: string,
+  now: string = new Date().toISOString(),
+): Behavior | null {
+  const res = db
+    .prepare(
+      `UPDATE behaviors SET status = 'deprecated', qa_note = @reason, updated_at = @now WHERE id = @id`,
+    )
+    .run({ id, reason, now });
+  if (res.changes === 0) return null;
+  const row = db.prepare("SELECT * FROM behaviors WHERE id = ?").get(id) as
+    | BehaviorRow
+    | undefined;
+  return row ? hydrate(row) : null;
+}
+
 // Case-insensitive LIKE over name + description (lexical fallback).
 // Empty query → returns all (non-deprecated). Semantic ranking lives in search.ts.
 export function queryBehavior(
