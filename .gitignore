@@ -1,0 +1,33 @@
+# --- banco de dados ---
+*.db
+*.db-shm
+*.db-wal
+
+# --- MCP config real (tem caminhos absolutos da máquina) ---
+.mcp.json
+
+# --- Claude Code: sessions e permissões locais ---
+.claude/settings.local.json
+.claude/projects/
+
+# --- JSONs de ingestão (contêm chaves Jira reais) ---
+tools/ONM*.json
+tools/onm*.json
+
+# --- Documentos internos ---
+*.docx
+*.pdf
+
+# --- Scripts one-off com paths hardcoded ---
+anotar-re1019.js
+gerar-re1019.js
+repack-docx.ps1
+
+# --- Diretórios de trabalho com dados internos ---
+ONMs-faltantes/
+ONMs-na-memoria/
+tmp-*/
+
+# --- Node ---
+node_modules/
+package-lock.json
