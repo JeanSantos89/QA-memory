@@ -30,6 +30,7 @@ import { type Ingester, PythonIngester } from "./ingester.js";
 import { type Assessor, PythonAssessor } from "./assessor.js";
 import { type Translator, PythonTranslator } from "./translator.js";
 import { feedKnowledge, packVector } from "./feed.js";
+import { EMBED_MODEL } from "./embeddings.js";
 import { searchBehaviors } from "./search.js";
 import { computeRisk } from "./risk.js";
 import { getLabels } from "./i18n.js";
@@ -346,8 +347,8 @@ export function createServer(
         const now = new Date().toISOString();
         db.prepare(
           `INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
-           VALUES (?, 'incident', ?, ?, ?, 'all-MiniLM-L6-v2', ?)`,
-        ).run(randomUUID(), id, incidentText, packVector(incVec), now);
+           VALUES (?, 'incident', ?, ?, ?, ?, ?)`,
+        ).run(randomUUID(), id, incidentText, packVector(incVec), EMBED_MODEL, now);
       }
 
       return {

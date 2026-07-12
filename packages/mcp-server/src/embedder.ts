@@ -38,6 +38,13 @@ function defaultCwd(env: NodeJS.ProcessEnv): string | undefined {
   return env.QA_MEMORY_INGESTION_DIR?.trim() || undefined;
 }
 
+// Subprocess budget (ms) for both the cold one-shot embed and each warm-server
+// request. Override via QA_MEMORY_EMBED_TIMEOUT_MS (mirrors the *_CMD pattern).
+function embedTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const v = parseInt(env.QA_MEMORY_EMBED_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(v) && v > 0 ? v : 60_000;
+}
+
 function parseVector(parsed: unknown): number[] | null {
   if (Array.isArray(parsed) && parsed.every((x) => typeof x === "number")) {
     return parsed as number[];
@@ -73,7 +80,7 @@ export class PythonEmbedder implements Embedder {
       const timer = setTimeout(() => {
         child.kill();
         finish(null);
-      }, 60_000);
+      }, embedTimeoutMs(this.env));
       child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
       child.on("error", () => {
         clearTimeout(timer);
@@ -170,7 +177,7 @@ export class PersistentEmbedder implements Embedder {
         tryLine();
       };
       const onClose = () => finish(null);
-      const timer = setTimeout(() => finish(null), 60_000);
+      const timer = setTimeout(() => finish(null), embedTimeoutMs(this.env));
       child.stdout.on("data", onData);
       child.on("close", onClose);
       child.stdin.write(JSON.stringify({ text }) + "\n");

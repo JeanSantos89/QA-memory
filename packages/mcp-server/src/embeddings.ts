@@ -2,6 +2,11 @@
 // vectors are float32 little-endian BLOBs (Python `array('f').tobytes()`).
 // Pure functions — no model, no I/O — so ranking is unit-testable on its own.
 
+// The one embedding model whose vectors are comparable. Stored on every
+// embeddings row and filtered on at query time: vectors from a different model
+// (even same-dimension) must never enter the same cosine ranking.
+export const EMBED_MODEL = "all-MiniLM-L6-v2";
+
 // Deserialize a float32 BLOB (as stored by the ingestion pipeline) to numbers.
 export function unpackVector(blob: Buffer): number[] {
   // A Float32Array view over the buffer's bytes. Node is little-endian on all

@@ -21,6 +21,10 @@ def connect(path: str | Path) -> sqlite3.Connection:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON")
+    # Explicit lock wait: MCP server (Node) and this pipeline can hit the same
+    # file-backed DB concurrently. sqlite3.connect's timeout defaults to 5s
+    # already — pinned here so the contract is intentional and mirrored in TS.
+    conn.execute("PRAGMA busy_timeout = 5000")
     if str(path) != ":memory:":
         conn.execute("PRAGMA journal_mode = WAL")
     migrate(conn)

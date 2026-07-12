@@ -12,6 +12,10 @@ export function openDb(path: string): Database.Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.pragma("foreign_keys = ON");
+  // Explicit lock wait: the MCP server and the Python pipeline can hit the same
+  // file-backed DB concurrently. better-sqlite3 defaults to 5000ms already —
+  // pinned here so the contract is intentional and mirrored in Python connect().
+  db.pragma("busy_timeout = 5000");
   if (path !== ":memory:") db.pragma("journal_mode = WAL");
   migrate(db);
   return db;

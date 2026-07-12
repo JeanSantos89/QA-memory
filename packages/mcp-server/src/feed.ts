@@ -13,10 +13,7 @@ import type { Database } from "better-sqlite3";
 import { insertBehavior } from "./repo/behaviors.js";
 import { insertRule } from "./repo/rules.js";
 import type { Embedder } from "./embedder.js";
-
-// Label stored on embedding rows (informational; search does not filter by it).
-// Matches the model the Python pipeline uses, so vectors share one space.
-const EMBED_MODEL = "all-MiniLM-L6-v2";
+import { EMBED_MODEL } from "./embeddings.js";
 
 export interface FeedRule {
   rule_text: string;

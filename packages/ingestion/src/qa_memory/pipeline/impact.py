@@ -23,7 +23,7 @@ from array import array
 from dataclasses import dataclass, field
 
 from qa_memory.pipeline.crosslang import translate_query
-from qa_memory.pipeline.embeddings import EMBEDDING_DIM, EmbeddingModel
+from qa_memory.pipeline.embeddings import DEFAULT_MODEL, EMBEDDING_DIM, EmbeddingModel
 from qa_memory.pipeline.extractor import TokenUsage, _parse_json
 from qa_memory.pipeline.llm import LLMClient
 
@@ -182,7 +182,9 @@ def _collect_candidates(
             """SELECT e.entity_id, e.vector, b.name, b.description
                  FROM embeddings e
                  JOIN behaviors b ON b.id = e.entity_id
-                WHERE e.entity_type = 'behavior' AND b.status != 'deprecated'"""
+                WHERE e.entity_type = 'behavior' AND b.status != 'deprecated'
+                  AND e.model = ?""",
+            (DEFAULT_MODEL,),
         ).fetchall()
         scored = []
         for entity_id, blob, name, desc in emb_rows:
@@ -286,7 +288,9 @@ def retrieve_related(
             """SELECT e.entity_id, e.vector, i.behavior_id
                  FROM embeddings e
                  JOIN incidents i ON i.id = e.entity_id
-                WHERE e.entity_type = 'incident'"""
+                WHERE e.entity_type = 'incident'
+                  AND e.model = ?""",
+            (DEFAULT_MODEL,),
         ).fetchall()
         inc_scored: list[tuple[float, str]] = []
         for _inc_id, blob, behavior_id in inc_rows:

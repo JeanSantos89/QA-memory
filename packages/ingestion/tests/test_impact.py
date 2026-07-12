@@ -9,7 +9,7 @@ import json
 import sqlite3
 
 from qa_memory.db import connect
-from qa_memory.pipeline.embeddings import EMBEDDING_DIM, pack_vector
+from qa_memory.pipeline.embeddings import DEFAULT_MODEL, EMBEDDING_DIM, pack_vector
 from qa_memory.pipeline.impact import analyze_impact, retrieve_related
 from qa_memory.pipeline.llm import LLMResponse
 
@@ -74,8 +74,8 @@ def _seed_behavior(
         )
     conn.execute(
         """INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
-           VALUES (?, 'behavior', ?, ?, ?, 'fake-embed', 'now')""",
-        (f"{bid}-e", bid, f"{name}\n{desc}", pack_vector(vector)),
+           VALUES (?, 'behavior', ?, ?, ?, ?, 'now')""",
+        (f"{bid}-e", bid, f"{name}\n{desc}", pack_vector(vector), DEFAULT_MODEL),
     )
     conn.commit()
 

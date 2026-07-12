@@ -9,7 +9,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6?style=flat-square&logo=typescript&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.11+-3572a5?style=flat-square&logo=python&logoColor=white)
-![Vitest](https://img.shields.io/badge/Vitest-152%20passing-6e9f18?style=flat-square)
+![Vitest](https://img.shields.io/badge/Vitest-153%20passing-6e9f18?style=flat-square)
 ![pytest](https://img.shields.io/badge/pytest-98%20passing-6e9f18?style=flat-square)
 ![MCP](https://img.shields.io/badge/MCP-compatible-8957e5?style=flat-square)
 
@@ -190,6 +190,10 @@ All configuration via environment variables:
 | `QA_MEMORY_LLM_MODEL` | provider default | Model override (e.g. `qwen2.5:14b` for Ollama) |
 | `QA_MEMORY_LANG` | `en` | Output language: `en` \| `pt-BR` |
 | `QA_MEMORY_INGESTION_DIR` | package path | Path to the ingestion package (auto-detected) |
+| `QA_MEMORY_SEMANTIC_FLOOR` | `0.25` | Minimum cosine score for a semantic match (`0`–`1`) |
+| `QA_MEMORY_EMBED_TIMEOUT_MS` | `60000` | Embedding subprocess timeout (one-shot and warm server) |
+| `QA_MEMORY_ASSESS_TIMEOUT_MS` | `300000` | Impact-analysis subprocess timeout |
+| `QA_MEMORY_TRANSLATE_TIMEOUT_MS` | `60000` | Translation subprocess timeout |
 
 ---
 
@@ -242,6 +246,13 @@ Each sync run has a configurable token budget (default: 50k tokens). The pipelin
 Your product knowledge lives in `.qa-memory/` which is git-ignored. The repo contains only neutral code and documentation — no company names, internal URLs, real ticket keys, or customer data. Clone it, point it at your product, and your knowledge stays local.
 
 To protect against accidental leaks, copy `.githooks/neutrality.local.example` to `.githooks/neutrality.local` and fill in your company-specific terms. The pre-commit and pre-push hooks will block any staged content that matches.
+
+---
+
+## Known limitations
+
+- **Semantic search is brute-force O(n).** Every query compares against all stored vectors in memory — no vector index. Measured: irrelevant below hundreds of thousands of rows, which a personal QA knowledge base never reaches. If you outgrow it, an index (e.g. sqlite-vec) is the upgrade path.
+- **Cross-language translation is not semantically validated.** The PT↔EN fallback guards against obvious garbage (empty output, echo, refusal, wrong language) but a fluent-yet-wrong translation passes through. Scope is limited to a search fallback when the original query returns zero results, so the blast radius is small.
 
 ---
 

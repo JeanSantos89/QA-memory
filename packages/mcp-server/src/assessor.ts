@@ -45,6 +45,13 @@ function defaultCwd(env: NodeJS.ProcessEnv): string | undefined {
   return env.QA_MEMORY_INGESTION_DIR?.trim() || undefined;
 }
 
+// Subprocess budget (ms) for the assess CLI (retrieval + LLM round-trip).
+// Override via QA_MEMORY_ASSESS_TIMEOUT_MS (mirrors the *_CMD pattern).
+function assessTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const v = parseInt(env.QA_MEMORY_ASSESS_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(v) && v > 0 ? v : 300_000;
+}
+
 function failed(message: string): ImpactAnalysis {
   return { ok: false, breaks: [], watch: [], conflicts: [], relatedRules: [], tokens: 0, message };
 }
@@ -71,7 +78,7 @@ export class PythonAssessor implements Assessor {
       input,
       cwd: this.cwd,
       encoding: "utf8",
-      timeout: 300_000,
+      timeout: assessTimeoutMs(this.env),
     });
     if (res.status !== 0) {
       return failed((res.stderr || res.stdout || "assess failed").trim());

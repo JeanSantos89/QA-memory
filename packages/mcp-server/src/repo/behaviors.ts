@@ -2,6 +2,7 @@
 // LIKE search over name/description (no embeddings yet — that lands in Fase 3).
 import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
+import { EMBED_MODEL } from "../embeddings.js";
 
 export type Criticality = "P0" | "P1" | "P2" | "P3" | string;
 export type BehaviorStatus = "active" | "deprecated" | "under_review";
@@ -104,7 +105,9 @@ export function listBehaviors(
 
 // Non-deprecated behaviors that have a stored embedding, paired with the
 // latest vector BLOB. Feeds semantic ranking (search.ts). One row per behavior
-// (most recent embedding wins).
+// (most recent embedding wins). Only vectors from the current EMBED_MODEL are
+// returned — vectors from another model are not comparable even at the same
+// dimension, so they must never enter the same cosine ranking.
 export function listBehaviorEmbeddings(db: Database): { behavior: Behavior; vector: Buffer }[] {
   const rows = db
     .prepare(
@@ -112,11 +115,12 @@ export function listBehaviorEmbeddings(db: Database): { behavior: Behavior; vect
          FROM behaviors b
          JOIN embeddings e
            ON e.entity_type = 'behavior' AND e.entity_id = b.id
+          AND e.model = ?
         WHERE b.status != 'deprecated'
         GROUP BY b.id
        HAVING e.created_at = MAX(e.created_at)`,
     )
-    .all() as (BehaviorRow & { vector: Buffer })[];
+    .all(EMBED_MODEL) as (BehaviorRow & { vector: Buffer })[];
   return rows.map((row) => {
     const { vector, ...behaviorRow } = row;
     return { behavior: hydrate(behaviorRow), vector };

@@ -2,6 +2,7 @@
 // SCHEMA: rules with confidence < 0.5 are under_review → not returned until confirmed.
 import { randomUUID } from "node:crypto";
 import type { Database } from "better-sqlite3";
+import { EMBED_MODEL } from "../embeddings.js";
 
 // Rules below this confidence are under_review (hidden from MCP consumers).
 export const UNDER_REVIEW_BELOW = 0.5;
@@ -236,6 +237,7 @@ export function findDuplicateRules(
 // Active rules that have a stored embedding, paired with the latest vector BLOB.
 // Feeds rule-level semantic ranking in search.ts so a query matching rule content
 // surfaces the parent behavior even when the behavior name/description doesn't match.
+// Filtered to the current EMBED_MODEL — cross-model vectors are not comparable.
 export function listRuleEmbeddings(
   db: Database,
 ): { rule_id: string; behavior_id: string; vector: Buffer }[] {
@@ -244,11 +246,12 @@ export function listRuleEmbeddings(
       `SELECT r.id AS rule_id, r.behavior_id, e.vector
          FROM rules r
          JOIN embeddings e ON e.entity_type = 'rule' AND e.entity_id = r.id
+          AND e.model = ?
         WHERE r.status = 'active'
         GROUP BY r.id
        HAVING e.created_at = MAX(e.created_at)`,
     )
-    .all() as { rule_id: string; behavior_id: string; vector: Buffer }[];
+    .all(EMBED_MODEL) as { rule_id: string; behavior_id: string; vector: Buffer }[];
 }
 
 export function getRuleById(db: Database, id: string): Rule | null {

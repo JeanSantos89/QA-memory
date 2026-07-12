@@ -31,6 +31,13 @@ function defaultCwd(env: NodeJS.ProcessEnv): string | undefined {
   return env.QA_MEMORY_INGESTION_DIR?.trim() || undefined;
 }
 
+// Subprocess budget (ms) for the translate CLI. Override via
+// QA_MEMORY_TRANSLATE_TIMEOUT_MS (mirrors the *_CMD pattern).
+function translateTimeoutMs(env: NodeJS.ProcessEnv): number {
+  const v = parseInt(env.QA_MEMORY_TRANSLATE_TIMEOUT_MS ?? "", 10);
+  return Number.isFinite(v) && v > 0 ? v : 60_000;
+}
+
 export class PythonTranslator implements Translator {
   private readonly cwd?: string;
 
@@ -48,7 +55,7 @@ export class PythonTranslator implements Translator {
       input: text,
       cwd: this.cwd,
       encoding: "utf8",
-      timeout: 60_000,
+      timeout: translateTimeoutMs(this.env),
     });
     if (res.status !== 0) return { translation: null, note: null };
     try {

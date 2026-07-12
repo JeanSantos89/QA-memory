@@ -5,6 +5,7 @@ import { insertRule } from "./repo/rules.js";
 import type { Embedder } from "./embedder.js";
 import type { Translator } from "./translator.js";
 import { searchBehaviors } from "./search.js";
+import { EMBED_MODEL } from "./embeddings.js";
 
 function pack(vec: number[]): Buffer {
   return Buffer.from(new Float32Array(vec).buffer);
@@ -15,8 +16,8 @@ function seedWithVector(db: ReturnType<typeof openDb>, name: string, vec: number
   const id = insertBehavior(db, { name, description: name, criticality: "P1" });
   db.prepare(
     `INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
-     VALUES (?, 'behavior', ?, ?, ?, 'fake', '2026-01-01')`,
-  ).run(`e-${id}`, id, name, pack(vec));
+     VALUES (?, 'behavior', ?, ?, ?, ?, '2026-01-01')`,
+  ).run(`e-${id}`, id, name, pack(vec), EMBED_MODEL);
   return id;
 }
 
@@ -39,6 +40,18 @@ describe("searchBehaviors (hybrid)", () => {
     seedWithVector(db, "Reporting", [0, 1, 0]);
     const results = await searchBehaviors(db, fixed([1, 0, 0]), "zzz-no-lexical-match");
     expect(results.map((b) => b.name)).toEqual(["Checkout"]);
+  });
+
+  it("ignores embeddings stored under a different model", async () => {
+    const db = openDb(":memory:");
+    const id = insertBehavior(db, { name: "Checkout", description: "Checkout", criticality: "P1" });
+    // Same dimension, perfect cosine — but from another model: must never rank.
+    db.prepare(
+      `INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
+       VALUES (?, 'behavior', ?, ?, ?, 'other-model', '2026-01-01')`,
+    ).run(`e-${id}`, id, "Checkout", pack([1, 0, 0]));
+    const results = await searchBehaviors(db, fixed([1, 0, 0]), "zzz-no-lexical-match");
+    expect(results).toHaveLength(0);
   });
 
   it("falls back to LIKE when there are no embeddings", async () => {
@@ -69,8 +82,8 @@ describe("searchBehaviors — rule-level semantic hits", () => {
     const rid = insertRule(db, { behavior_id: bid, rule_text: ruleText, confidence: 1.0, qa_override: true });
     db.prepare(
       `INSERT INTO embeddings (id, entity_type, entity_id, content, vector, model, created_at)
-       VALUES (?, 'rule', ?, ?, ?, 'fake', '2026-01-01')`,
-    ).run(`e-${rid}`, rid, ruleText, pack(ruleVec));
+       VALUES (?, 'rule', ?, ?, ?, ?, '2026-01-01')`,
+    ).run(`e-${rid}`, rid, ruleText, pack(ruleVec), EMBED_MODEL);
     return bid;
   }
 
