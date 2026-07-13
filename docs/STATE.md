@@ -3,8 +3,9 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** higienização + robustez (2026-07-11): filtro de `model` nos reads de embeddings (TS + Python), `busy_timeout` explícito, timeouts de subprocess configuráveis via env, CONTRIBUTING.md, job de CI de integração real (TS ↔ Python com modelo de verdade). Workspace local limpo (arquivos de trabalho movidos p/ fora do repo).
+- **Fase atual:** roadmap de produto (Fases 0–5) COMPLETO. Sessão 2026-07-11: higienização + robustez (filtro de `model` nos reads de embeddings TS+Python, `busy_timeout` explícito, timeouts de subprocess via env, CONTRIBUTING.md, CI de integração real TS↔Python) + limpeza de repo público (Fase A: mensagem do commit `ab3ef836` sanitizada, `origin/master` deletado, email pessoal redigido do HEAD).
 - **TESTES no fim da sessão:** 153 Vitest ✓ (+2 integração, opt-in) / 98 pytest ✓ / ruff/mypy strict ✓ / typecheck ✓.
+- **Resta:** decidir a pendência de tooling de manutenção (agentes `block-runner`/`neutrality-auditor`/`doc-healer` + skills `qa-block`/`qa-validate`/`fewer-permission-prompts` — ver seção "PENDÊNCIA registrada" abaixo). Sem trabalho de produto pendente.
 
 ## Último bloco concluído — CI de integração real TS ↔ Python (2026-07-11)
 - **O QUÊ:** fecha o gap "CI nunca exercita o caminho real cross-linguagem" — toda validação do embedder real era manual. Novo `src/integration.test.ts` gated por `QA_MEMORY_IT=1`: (1) `PersistentEmbedder` spawna o `uv run qa-memory embed-serve` REAL e valida vetor 384-dim finito; (2) `feedKnowledge` → `searchBehaviors` ponta-a-ponta com vetores reais — query "cancel my purchase" sem overlap de LIKE precisa rankear "Order cancellation" primeiro só pela semântica. Job `integration` separado no ci.yml (Node+Python+uv+cache HF já existente). `assess`/`translate` reais continuam manuais — exigem chave LLM que o CI não tem.
@@ -146,7 +147,7 @@
 - **Bloco anterior:** 4.2 — `update_rule`/override (write). 4.1 — `query_risk` + repo de rules TS + score derivado (`risk.ts`). Ver ADR 012/013.
 - **VALIDAÇÃO S.1 (2026-05-30, run manual):** embedding PONTA-A-PONTA PROVADO com modelo real. DB semeado com 3 behaviors + vetores reais (all-MiniLM, pack_vector BLOB), query SEM overlap lexical com o alvo → LIKE=0 matches, mas híbrido retorna só "User authentication" (cosine 0.3985 acima do floor 0.25; payment 0.207 e email 0.085 filtrados). Confirma: serialização float32 BLOB Python→TS bate, modelo no mesmo espaço, semântica supera LIKE, SEMANTIC_FLOOR corta certo, subprocess plumbing OK neste host. **Cold-start medido: ~10s/query** (modelo cacheado; 1ª vez ~48s c/ download ~90MB) → otimização (helper Python "quente"/persistente) continua pendente e é custo real. Embeddings ainda só de behaviors (rules/incidents = futuro).
 - **Bloco LLM-provider-plugável (2026-05-30, ver ADR 017):** 3 clients atrás do Protocol `LLMClient` — `AnthropicClient`, `GeminiClient` (SDK `google-genai`, JSON via response_mime_type, tokens via usage_metadata), `OllamaClient` (Llama LOCAL via `/api/chat`, só stdlib urllib, sem dep/key, JSON via format=json, tokens via prompt_eval_count/eval_count, base URL `QA_MEMORY_LLM_BASE_URL` default localhost:11434). Factory `make_llm_client()` escolhe por env `QA_MEMORY_LLM` = anthropic (DEFAULT) | gemini | ollama(alias llama); model override `QA_MEMORY_LLM_MODEL`. CLI (`ingest`+`ingest-text`) usa a factory. Dep nova só `google-genai>=1.0` (ollama=zero dep). 44 pytest ✓ (+6 test_llm: factory default/gemini/ollama/unknown + mapeamento de tokens gemini & ollama), ruff/mypy ✓.
-- **Próximo bloco — PRIMEIRA USER STORY (prioridade do usuário):** "não vi valor ainda" (2026-05-30). Infra de velocidade resolvida (cold-start), pipeline LLM validado. Falta rodar o LOOP DE VALOR ponta-a-ponta: alimentar conhecimento REAL (instância local git-ignored sobre o produto do trabalho, ou dogfood) → fazer uma pergunta (query_risk/query_behavior) que ajude numa decisão de teste real → medir se poupou tempo. Não é mais infra. Candidatos de infra que ficam DEPOIS: 5.2 file-path/PDF-routing, subagent automatizado, conectores nativos.
+- **PRIMEIRA USER STORY [✅ RESOLVIDA]:** "não vi valor ainda" (2026-05-30) — pendência de validar o loop de valor ponta-a-ponta com conhecimento real. Resolvida na prática: uso real e contínuo sobre a plataforma Geofusion Intelligence (arquitetura, SSO, exportação, mapoteca, postmortems, sociodemografia etc. — ver memórias de projeto), passando por query_risk/query_behavior em decisões de teste reais. Não ficou registrado aqui na hora porque o uso foi orgânico, via sessões subsequentes, não como um bloco dedicado de medição.
 
 ## Toolchain (instalado nesta máquina)
 - Node 24.13.0 · pnpm 11.5.0 (via `npm i -g`; corepack falhou com EPERM em `C:\Program Files\nodejs` sem admin → usar npm global)
@@ -198,25 +199,24 @@ Ordem pensada p/ maximizar valor de QA por bloco, mantendo a regra "1 bloco = un
 - Fechou o ACHADO AO VIVO. Traduzir a query antes do retrieve + união de candidatos, com guarda de LLM (degrada+avisa). Ver "Último bloco concluído".
 
 ### Futuro (sem bloco ainda — depende de prioridade do usuário)
-- **Subagent/skill "memory-keeper"** automatizado (cuida da memória sozinho — sync, dedup, confirma inferências; hoje regras entram como inferred 0.60 e ninguém promove a QA-confirmed). É a inteligência no AGENTE (ADR 014), não em conector. **EM ANDAMENTO:** Bloco 1 CONCLUÍDO (ADR 028) — tool `review_memory` dá a worklist. Bloco 2 CONCLUÍDO (ADR 029) — o AGENTE `.claude/agents/memory-keeper.md` orquestra o loop ver→propor→(aval do usuário)→`update_rule`. Bloco 3 CONCLUÍDO (ADR 030) — `find_duplicate_rules` (dedup lexical). Bloco 4 CONCLUÍDO (ADR 031, migration 002) — `retire_rule` + `rules.status`; dedup ponta-a-ponta (detectar→propor→aprovar→aposentar). **Ciclo de curadoria completo.** Candidatos restantes (sem bloco): embeddings de rules, dedup de behaviors, **validação ao vivo do agente** (exige MCP `qa-memory` conectado).
-- **Embeddings de rules/incidents** (hoje só behaviors são embedados) — melhora recall quando o volume crescer.
+- ~~**Subagent/skill "memory-keeper"**~~ — CONCLUÍDO. Ciclo de curadoria completo: `review_memory` (worklist, ADR 028), agente orquestra ver→propor→aval→`update_rule` (ADR 029), `find_duplicate_rules` (ADR 030), `retire_rule` (ADR 031), `find_duplicate_behaviors`+`deprecate_behavior` (ADR 035), auto-promote + validação ao vivo do agente feita (2026-06-06, fila zerada).
+- ~~**Embeddings de rules/incidents**~~ — concluído (ADR 034 rules, ADR 036 incidents). Todas as entidades embedadas.
 - ~~**Conectores nativos Jira + Confluence**~~ — concluído (ADR 037). Drive/outros conectores: futuro se necessário.
 - ~~**i18n 2ª passada**~~ — concluído neste bloco.
 - **UI dedicada (C)** — ADIADA, só se não-técnico virar prioridade (usuário avisa).
 
 
-### PENDÊNCIA registrada (2026-05-31) — tooling do repo, decidir DEPOIS do projeto completo
-> Usuário pediu p/ MARCAR, não implementar agora. Decidir o conjunto quando o produto estiver fechado.
-- **Agentes (`.claude/agents/`)** p/ manutenção fácil — candidatos levantados (escolher quais valem a pena):
-  - `memory-keeper` — promove regras inferred 0.60 → QA-confirmed, dedup, sync (é o subagent do ADR 014, já no Futuro acima).
+### PENDÊNCIA — tooling do repo (registrada 2026-05-31, gate "depois do projeto completo" já satisfeito)
+> Produto fechado + repo já público (Fase A concluída 2026-07-11) — o gate que adiava esta decisão já foi cumprido. Falta só escolher o que vale a pena, itens abaixo continuam sem decisão.
+- **Agentes (`.claude/agents/`)** candidatos, não criados:
   - `block-runner` — encarna "1 bloco = unidade + testes + doc + 1 commit"; roda vitest/pytest/ruff/mypy + atualiza doc vivo antes do commit.
-  - `neutrality-auditor` — automatiza o ADR 010 (varre creds/Jira real/empresa/URLs internas a cada commit ou antes de tornar público).
+  - `neutrality-auditor` — automatiza o scan de creds/Jira real/empresa/URLs internas a cada commit (feito manualmente na Fase A desta sessão).
   - `doc-healer` — escreve a atualização dos docs vivos (STATE/DECISIONS/SCHEMA) a partir do diff (o hook só BLOQUEIA; este de fato preenche).
-- **Skills token-friendly** — candidatos (decidir):
+  - (`memory-keeper` já existe e está em uso — não é mais candidato.)
+- **Skills token-friendly** candidatas, não instaladas:
   - `/fewer-permission-prompts` (built-in) — allowlist de comandos read-only (git/uv/pnpm/pytest) no `.claude/settings.json` → menos prompts.
   - skill de projeto `qa-block` — encapsula o fluxo de bloco em poucos tokens (embute as regras do CLAUDE.md, não re-explica toda vez).
   - skill de projeto `qa-validate` — roda os 4 (vitest+pytest+ruff+mypy+typecheck) com os PATH/env desta máquina num comando.
-- **PRÓXIMOS PASSOS PÓS-PROJETO (ordem sugerida quando o produto fechar):** (1) escolher + criar os agentes acima; (2) instalar as skills; (3) rodar `/fewer-permission-prompts`; (4) decidir tornar o repo público (com `neutrality-auditor` passando). Isto é tooling de manutenção, não feature de produto — fica por último.
 
 ## Decisões em aberto
 - Reordenar fontes: usuário tem conhecimento "na cabeça" + Confluence + Jira (não PDF como prioridade real). PDF continua sendo a 1ª fonte IMPLEMENTADA (simples, sem auth, fácil de testar), mas Jira+Confluence (Atlassian, mesmo token) sobem na prioridade logo após. "Na cabeça" → via update_rule (conversa).
