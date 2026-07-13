@@ -3,10 +3,19 @@
 > Living doc. Updated every block, same commit. New chat reads this to know where to continue.
 
 ## Status atual
-- **Fase atual:** 3 débitos técnicos resolvidos (2026-06-08): SEMANTIC_FLOOR via env, i18n review_memory, glob {a,b}+negação. UI e tooling de manutenção permanecem como futuro.
-- **TESTES no fim da sessão:** 152 Vitest ✓ / 98 pytest ✓ / ruff/mypy strict ✓ / typecheck ✓.
+- **Fase atual:** higienização + robustez (2026-07-11): filtro de `model` nos reads de embeddings (TS + Python), `busy_timeout` explícito, timeouts de subprocess configuráveis via env, CONTRIBUTING.md, job de CI de integração real (TS ↔ Python com modelo de verdade). Workspace local limpo (arquivos de trabalho movidos p/ fora do repo).
+- **TESTES no fim da sessão:** 153 Vitest ✓ (+2 integração, opt-in) / 98 pytest ✓ / ruff/mypy strict ✓ / typecheck ✓.
 
-## Último bloco concluído — 3 débitos técnicos (2026-06-08)
+## Último bloco concluído — CI de integração real TS ↔ Python (2026-07-11)
+- **O QUÊ:** fecha o gap "CI nunca exercita o caminho real cross-linguagem" — toda validação do embedder real era manual. Novo `src/integration.test.ts` gated por `QA_MEMORY_IT=1`: (1) `PersistentEmbedder` spawna o `uv run qa-memory embed-serve` REAL e valida vetor 384-dim finito; (2) `feedKnowledge` → `searchBehaviors` ponta-a-ponta com vetores reais — query "cancel my purchase" sem overlap de LIKE precisa rankear "Order cancellation" primeiro só pela semântica. Job `integration` separado no ci.yml (Node+Python+uv+cache HF já existente). `assess`/`translate` reais continuam manuais — exigem chave LLM que o CI não tem.
+- **TESTES:** +2 integração (passam local em ~15s com modelo quente; skipados no `pnpm test` normal). Suíte normal intacta.
+
+## Último bloco concluído — higienização + robustez (2026-07-11)
+- **O QUÊ:** (1) Filtro de modelo nos reads de embeddings — `EMBED_MODEL` exportado de `embeddings.ts`; `listBehaviorEmbeddings`/`listRuleEmbeddings` (TS) e retrieval de `impact.py` (behaviors + incidentes) agora filtram `e.model = ?`. Vetor de modelo diferente (mesma dimensão) nunca entra no mesmo ranking de cosseno. Insert de incident embedding em `server.ts` usa a constante. (2) `PRAGMA busy_timeout = 5000` explícito em `db/index.ts` + `db/__init__.py` (antes era default implícito das libs; agora contrato intencional espelhado nos dois lados). (3) Timeouts de subprocess viraram env vars com default = valor antigo, espelhando o padrão `*_CMD`: `QA_MEMORY_EMBED_TIMEOUT_MS` (60s, one-shot e warm-server), `QA_MEMORY_ASSESS_TIMEOUT_MS` (300s), `QA_MEMORY_TRANSLATE_TIMEOUT_MS` (60s). (4) `tools/ingest_pdf.py` — source_ref de exemplo neutro na docstring. (5) CONTRIBUTING.md curto (projeto pessoal, não mantido ativamente).
+- **TESTES:** +1 Vitest search.test (vetor de outro modelo com cosseno perfeito é ignorado); fixtures (search.test.ts + test_impact.py) atualizadas para gravar o modelo real. **153 Vitest ✓ / 98 pytest ✓ / ruff ✓ / mypy ✓ / typecheck ✓.**
+- **Limitações conhecidas (decisão: documentar, não construir):** busca semântica é O(n) força bruta — só importa a partir de centenas de milhares de linhas; guarda de tradução não valida equivalência semântica — escopo é só fallback de busca.
+
+## Último bloco concluído antes — 3 débitos técnicos (2026-06-08)
 - **O QUÊ:** (1) `QA_MEMORY_SEMANTIC_FLOOR` env var — floor configurável sem restart, leitura inline p/ teste funcionar. (2) i18n de `review_memory` — header/footer/flag "UNDER REVIEW"/"EM REVISÃO" agora seguem `QA_MEMORY_LANG`. (3) `globToRegExp` suporta `{a,b,c}` (alternação) e `!` prefixo (negação). `matchesGlob` transparente ao chamador.
 - **TESTES:** +2 search (floor alto filtra, env inválido usa default) +2 areas (brace expansion, negação) +1 i18n (reviewMemory labels EN+PT). **152 Vitest ✓ / typecheck ✓ / 98 pytest ✓ (intacto).**
 
