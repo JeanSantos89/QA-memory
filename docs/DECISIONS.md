@@ -24,7 +24,7 @@
 ## 004 — Git isolado de conta de trabalho
 - **Date:** 2026-05-30
 - **Context:** Máquina logada em outra conta corporativa; repo é da conta pessoal JeanSantos89.
-- **Decision:** Identidade git LOCAL (não global): user.name=JeanSantos89, email=jeansaantos89@gmail.com. Remote com username embutido (`JeanSantos89@github.com/...`) p/ GCM isolar credenciais. PAT fine-grained da conta pessoal.
+- **Decision:** Identidade git LOCAL (não global): user.name=JeanSantos89, email pessoal (git-config local, não commitado). Remote com username embutido (`JeanSantos89@github.com/...`) p/ GCM isolar credenciais. PAT fine-grained da conta pessoal.
 - **Consequences:** Commits atribuídos à conta pessoal sem afetar config global da máquina.
 
 ## 005 — Toolchain instalado sem admin

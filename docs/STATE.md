@@ -232,7 +232,7 @@ Ordem pensada p/ maximizar valor de QA por bloco, mantendo a regra "1 bloco = un
 - **Re-auditado em 2026-05-31 (antes do push do Bloco 11):** working tree varrida por creds (sk-ant/AKIA/ghp/bearer), chaves Jira reais, nome de empresa e domínio interno — limpa. `.gitignore` cobre `.qa-memory/`, `.env`, `.venv`, `*.token`, `**/google-creds.json`; nada sensível trackado. Docs vivos neutralizados: a chave/projeto interno citado por extenso no ADR 010 + STATE foi trocado por "projeto interno" (código já era neutro).
 
 ## Notas para o próximo chat
-- Git: remote `JeanSantos89/qa-memory` (privado), identidade LOCAL JeanSantos89 / jeansaantos89@gmail.com. Token no GCM.
+- Git: remote `JeanSantos89/qa-memory` (privado), identidade LOCAL JeanSantos89 / email pessoal (git-config local, não commitado). Token no GCM.
 - Hooks ativados via `git config core.hooksPath .githooks` (rodar após clone).
 - Projeto pessoal independente — NÃO seguir convenções de organização externas; seguir este repo.
 - Validar TS: `pnpm install && pnpm typecheck && pnpm test` em packages/mcp-server. Validar Py: `uv sync && uv run ruff check && uv run mypy && uv run pytest` em packages/ingestion.
