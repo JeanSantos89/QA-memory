@@ -1,3 +1,8 @@
 # Hooks and shell scripts MUST be LF — CRLF breaks the sh interpreter on Windows.
 .githooks/** text eol=lf
 *.sh text eol=lf
+
+# Linguist: this is a markdown knowledge base, not a shell project.
+# Count markdown; exclude the few shell hooks from language stats.
+*.md linguist-detectable
+.githooks/** linguist-vendored
